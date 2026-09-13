@@ -60,9 +60,12 @@ public final class TypeInference {
             return t;
         }
         if (n instanceof UnaryNode u) {
-            inferNode(u.getChild(), vars, registry);
+            DataType childType = inferNode(u.getChild(), vars, registry);
             DataType result = switch (u.getOp()) {
                 case NEG -> {
+                    if (childType == DataType.DATE || childType == DataType.DATETIME) {
+                        yield childType;
+                    }
                     require(vars, u.getChild(), DataType.NUMERIC);
                     yield DataType.NUMERIC;
                 }
@@ -82,18 +85,44 @@ public final class TypeInference {
 if (n instanceof OperationsNode on) {
             boolean anyString = false;
             boolean anyBoolean = false;
+            boolean anyDate = false;
             List<Node> children = on.getChildren();
             for (Node c : children) {
                 DataType t = inferNode(c, vars, registry);
                 anyString |= t == DataType.STRING;
                 anyBoolean |= t == DataType.BOOLEAN;
+                anyDate |= isDateKind(t);
             }
             DataType result;
             switch (on.getOp()) {
                 case ADD -> {
                     if (anyString) {
-                        for (Node c : children) require(vars, c, DataType.STRING);
+                        for (Node c : children) {
+                            DataType t = c.getType();
+                            if (t != DataType.STRING && !isDateKind(t)) {
+                                require(vars, c, DataType.STRING);
+                            }
+                        }
                         result = DataType.STRING;
+                    } else if (anyDate) {
+                        boolean hasNeg = false;
+                        boolean hasNonNeg = false;
+                        boolean anyDateTime = false;
+                        for (Node c : children) {
+                            if (isDateKind(c.getType())) {
+                                if (c instanceof UnaryNode un && un.getOp() == Operation.NEG) {
+                                    hasNeg = true;
+                                } else {
+                                    hasNonNeg = true;
+                                }
+                                if (c.getType() == DataType.DATETIME) {
+                                    anyDateTime = true;
+                                }
+                            }
+                        }
+                        result = (hasNeg && hasNonNeg)
+                                ? (anyDateTime ? DataType.DATETIME : DataType.NUMERIC)
+                                : DataType.ANY;
                     } else {
                         for (Node c : children) require(vars, c, DataType.NUMERIC);
                         result = DataType.NUMERIC;
@@ -123,9 +152,20 @@ if (n instanceof OperationsNode on) {
             switch (b.getOp()) {
                 case ADD:
                     if (lt == DataType.STRING || rt == DataType.STRING) {
-                        require(vars, b.getLeft(), DataType.STRING);
-                        require(vars, b.getRight(), DataType.STRING);
-                        result = DataType.STRING;
+                        if (isDateKind(lt) || isDateKind(rt)) {
+                            result = DataType.STRING;
+                        } else {
+                            require(vars, b.getLeft(), DataType.STRING);
+                            require(vars, b.getRight(), DataType.STRING);
+                            result = DataType.STRING;
+                        }
+                    } else if (isDateKind(lt) || isDateKind(rt)) {
+                        boolean lNeg = b.getLeft() instanceof UnaryNode un2 && un2.getOp() == Operation.NEG;
+                        boolean rNeg = b.getRight() instanceof UnaryNode un3 && un3.getOp() == Operation.NEG;
+                        result = (lNeg != rNeg)
+                                ? ((lt == DataType.DATETIME || rt == DataType.DATETIME)
+                                        ? DataType.DATETIME : DataType.NUMERIC)
+                                : DataType.ANY;
                     } else {
                         require(vars, b.getLeft(), DataType.NUMERIC);
                         require(vars, b.getRight(), DataType.NUMERIC);
@@ -151,6 +191,12 @@ if (n instanceof OperationsNode on) {
                     if (lt == DataType.STRING || rt == DataType.STRING) {
                         require(vars, b.getLeft(), DataType.STRING);
                         require(vars, b.getRight(), DataType.STRING);
+                    } else if (isDateKind(lt) || isDateKind(rt)) {
+                        if (!isDateKind(lt)) require(vars, b.getLeft(), rt);
+                        if (!isDateKind(rt)) require(vars, b.getRight(), lt);
+                    } else if (lt == DataType.TIME || rt == DataType.TIME) {
+                        if (lt != DataType.TIME) require(vars, b.getLeft(), DataType.TIME);
+                        if (rt != DataType.TIME) require(vars, b.getRight(), DataType.TIME);
                     } else if (lt == DataType.BOOLEAN || rt == DataType.BOOLEAN) {
                         require(vars, b.getLeft(), DataType.BOOLEAN);
                         require(vars, b.getRight(), DataType.BOOLEAN);
@@ -164,6 +210,12 @@ if (n instanceof OperationsNode on) {
                     if (lt == DataType.STRING || rt == DataType.STRING) {
                         require(vars, b.getLeft(), DataType.STRING);
                         require(vars, b.getRight(), DataType.STRING);
+                    } else if (isDateKind(lt) || isDateKind(rt)) {
+                        if (!isDateKind(lt)) require(vars, b.getLeft(), rt);
+                        if (!isDateKind(rt)) require(vars, b.getRight(), lt);
+                    } else if (lt == DataType.TIME || rt == DataType.TIME) {
+                        if (lt != DataType.TIME) require(vars, b.getLeft(), DataType.TIME);
+                        if (rt != DataType.TIME) require(vars, b.getRight(), DataType.TIME);
                     } else {
                         require(vars, b.getLeft(), DataType.NUMERIC);
                         require(vars, b.getRight(), DataType.NUMERIC);
@@ -183,15 +235,23 @@ if (n instanceof OperationsNode on) {
             }
             DataType[] sig = fn.getParameterTypes();
             List<Node> ps = f.getParams();
+            for (Node p : ps) {
+                inferNode(p, vars, registry);
+            }
             for (int i = 0; i < ps.size(); i++) {
                 if (i < sig.length && sig[i] != DataType.ANY) {
                     require(vars, ps.get(i), sig[i]);
                 }
             }
-            f.setType(fn.getReturnType());
-            return fn.getReturnType();
+            DataType result = fn.resolveReturnType(ps);
+            f.setType(result);
+            return result;
         }
         return DataType.ANY;
+    }
+
+    private static boolean isDateKind(DataType t) {
+        return t == DataType.DATE || t == DataType.DATETIME;
     }
 
     private static void require(Map<String, DataType> vars, Node node, DataType type) {

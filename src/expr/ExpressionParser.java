@@ -219,24 +219,34 @@ public class ExpressionParser {
     private Node parseMultiplicative() {
         List<Node> factors = new ArrayList<>();
         factors.add(parseUnary());
-        while (peek().type == TokenType.OP) {
-            Operation op = peek().op;
-            if (op != Operation.MUL && op != Operation.DIV && op != Operation.MOD) {
-                break;
-            }
-            next();
-            Node right = parseUnary();
-            switch (op) {
-                case MUL -> factors.add(right);
-                case DIV -> factors.add(new UnaryNode(Operation.RECIP, right));
-                case MOD -> {
-                    Node combined = ofOperation(Operation.MUL, factors);
-                    Node mod = new BinaryNode(Operation.MOD, combined, right);
-                    factors.clear();
-                    factors.add(mod);
+        while (true) {
+            Token t = peek();
+            if (t.type == TokenType.OP) {
+                Operation op = t.op;
+                if (op != Operation.MUL && op != Operation.DIV && op != Operation.MOD) {
+                    break;
                 }
-                default -> throw new ExpressionException("Unexpected operator: " + op);
+                next();
+                Node right = parseUnary();
+                switch (op) {
+                    case MUL -> factors.add(right);
+                    case DIV -> factors.add(new UnaryNode(Operation.RECIP, right));
+                    case MOD -> {
+                        Node combined = ofOperation(Operation.MUL, factors);
+                        Node mod = new BinaryNode(Operation.MOD, combined, right);
+                        factors.clear();
+                        factors.add(mod);
+                    }
+                    default -> throw new ExpressionException("Unexpected operator: " + op);
+                }
+                continue;
             }
+            if ((t.type == TokenType.NUMBER || t.type == TokenType.IDENT || t.type == TokenType.LPAREN)
+                    && !factors.isEmpty()) {
+                factors.add(parseUnary());
+                continue;
+            }
+            break;
         }
         return ofOperation(Operation.MUL, factors);
     }

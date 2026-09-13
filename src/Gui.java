@@ -6,6 +6,7 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import javax.swing.BorderFactory;
@@ -14,12 +15,21 @@ import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import javax.swing.table.AbstractTableModel;
+import javax.swing.event.TableModelEvent;
 
 import expr.EvalUtil;
 import expr.Expression;
+import functions.FunctionRegistry;
+import functions.MathFunctions;
+import functions.Warnings;
+import functions.custom.ArrayGetFunction;
+import functions.custom.ArrayTable;
+import functions.custom.Cell;
 
 public class Gui {
 
@@ -27,6 +37,13 @@ public class Gui {
     private final JTextArea varsArea = new JTextArea(5, 40);
     private final JTextArea output = new JTextArea();
     private final JLabel status = new JLabel(" ");
+    private final JTextField rowsField = new JTextField("3", 3);
+    private final JTextField colsField = new JTextField("3", 3);
+    private final ArrayTable arrayTable = new ArrayTable();
+    private final FunctionRegistry registry;
+    private final ArrayModel arrayModel = new ArrayModel();
+    private final JTable arrayGrid = new JTable(arrayModel);
+    private final JLabel typeLabel = new JLabel(" ");
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(Gui::new);
@@ -35,8 +52,11 @@ public class Gui {
     public Gui() {
         Font mono = new Font(Font.MONOSPACED, Font.PLAIN, 13);
 
+        registry = MathFunctions.createRegistry();
+        registry.register(new ArrayGetFunction(arrayTable));
+
         exprField.setFont(mono);
-        exprField.setText("3*x + 2*5");
+        exprField.setText("addDays(get(2,1), 30)");
 
         varsArea.setFont(mono);
         varsArea.setText("x = 4");
@@ -44,6 +64,24 @@ public class Gui {
         output.setFont(mono);
         output.setEditable(false);
         output.setLineWrap(false);
+
+        arrayModel.setDimension(3, 3);
+        arrayModel.setValueAt("13", 0, 1);
+        arrayModel.setValueAt("'hello'", 0, 2);
+        arrayModel.setValueAt("true", 0, 3);
+        arrayModel.setValueAt("2024-01-15", 1, 1);
+        arrayModel.setValueAt("2023-12-25 23:59:59", 1, 2);
+        arrayModel.setValueAt("23:59:59", 1, 3);
+        arrayTable.setData(arrayModel.buildData());
+        arrayGrid.setFillsViewportHeight(true);
+        arrayGrid.getModel().addTableModelListener(e -> {
+            if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
+                String raw = arrayModel.getRawValue(e.getFirstRow(), e.getColumn());
+                Cell cell = Cell.parse(raw);
+                typeLabel.setText(cell.isEmpty() ? " " : "Cell (" + (e.getFirstRow() + 1) + ","
+                        + e.getColumn() + ") type: " + cell.getType().name());
+            }
+        });
 
         JPanel form = new JPanel(new GridBagLayout());
         form.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
@@ -64,10 +102,10 @@ public class Gui {
 
         c.gridy = 3;
         JScrollPane varsScroll = new JScrollPane(varsArea);
-        varsScroll.setPreferredSize(new Dimension(600, 90));
+        varsScroll.setPreferredSize(new Dimension(600, 70));
         form.add(varsScroll, c);
 
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 4));
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         JButton btnParse = new JButton("PARSE");
         JButton btnOptimise = new JButton("OPTIMISE");
         JButton btnEvaluate = new JButton("EVALUATE");
@@ -77,6 +115,31 @@ public class Gui {
 
         c.gridy = 4;
         form.add(buttons, c);
+
+        JPanel arrayControls = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        arrayControls.add(new JLabel("Array dimensions: rows"));
+        rowsField.setFont(mono);
+        colsField.setFont(mono);
+        arrayControls.add(rowsField);
+        arrayControls.add(new JLabel("columns"));
+        arrayControls.add(colsField);
+        JButton btnCreate = new JButton("Create array");
+        arrayControls.add(btnCreate);
+        typeLabel.setFont(mono);
+        arrayControls.add(typeLabel);
+
+        c.gridy = 5;
+        form.add(arrayControls, c);
+
+        c.gridy = 6;
+        JScrollPane arrayScroll = new JScrollPane(arrayGrid);
+        arrayScroll.setPreferredSize(new Dimension(600, 130));
+        form.add(arrayScroll, c);
+
+        c.gridy = 7;
+        form.add(new JLabel("<html>get(row, col) uses 1-based indices. Cell formats: 13, 'text', true,"
+                + " 2024-01-15 (date), 2024-01-15 10:30:00 (datetime), 23:59:59 (time)."
+                + "<br>Empty cell / out-of-range index -&gt; warning, result null.</html>"), c);
 
         JPanel center = new JPanel(new BorderLayout());
         center.setBorder(BorderFactory.createEmptyBorder(0, 8, 8, 8));
@@ -89,18 +152,19 @@ public class Gui {
         frame.add(form, BorderLayout.NORTH);
         frame.add(center, BorderLayout.CENTER);
         frame.add(status, BorderLayout.SOUTH);
-        frame.setSize(700, 640);
+        frame.setSize(700, 760);
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
 
         btnParse.addActionListener(e -> doParse());
         btnOptimise.addActionListener(e -> doOptimise());
         btnEvaluate.addActionListener(e -> doEvaluate());
+        btnCreate.addActionListener(e -> doCreateArray());
     }
 
     private void doParse() {
         try {
-            Expression expr = Expression.parse(exprField.getText());
+            Expression expr = Expression.parse(exprField.getText(), registry);
             output.setText(expr.toOriginalXml());
             setStatus("Parsed OK.");
         } catch (Exception ex) {
@@ -110,7 +174,7 @@ public class Gui {
 
     private void doOptimise() {
         try {
-            Expression expr = Expression.parse(exprField.getText());
+            Expression expr = Expression.parse(exprField.getText(), registry);
             output.setText(expr.toOptimizedXml());
             setStatus("Optimised OK. Variables: " + expr.getVariableTypes());
         } catch (Exception ex) {
@@ -120,10 +184,39 @@ public class Gui {
 
     private void doEvaluate() {
         try {
-            Expression expr = Expression.parse(exprField.getText());
+            arrayTable.setData(arrayModel.buildData());
+            Warnings.clear();
+            Expression expr = Expression.parse(exprField.getText(), registry);
             Object result = expr.evaluate(parseBindings(varsArea.getText()));
-            output.setText(EvalUtil.asString(result) + "\n\nData type: " + typeName(result));
-            setStatus("Evaluated OK.");
+            StringBuilder sb = new StringBuilder();
+            sb.append("Result: ").append(result == null ? "(null)" : EvalUtil.asString(result));
+            sb.append("\n\nData type: ").append(typeName(result));
+            List<String> warnings = Warnings.get();
+            if (!warnings.isEmpty()) {
+                sb.append("\n\nWarnings (").append(warnings.size()).append("):");
+                for (String w : warnings) {
+                    sb.append("\n- ").append(w);
+                }
+                setStatus("Evaluated, with " + warnings.size() + " warning(s).");
+            } else {
+                setStatus("Evaluated OK.");
+            }
+            output.setText(sb.toString());
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    private void doCreateArray() {
+        try {
+            int rows = Integer.parseInt(rowsField.getText().trim());
+            int cols = Integer.parseInt(colsField.getText().trim());
+            if (rows < 1 || cols < 1 || rows > 100 || cols > 100) {
+                throw new IllegalArgumentException("Rows and columns must be between 1 and 100.");
+            }
+            arrayModel.setDimension(rows, cols);
+            arrayTable.setData(arrayModel.buildData());
+            setStatus("Array created: " + rows + "x" + cols + ". Fill in the cells and use get(row,col).");
         } catch (Exception ex) {
             showError(ex);
         }
@@ -177,6 +270,71 @@ public class Gui {
         if (o instanceof Double) return "NUMERIC";
         if (o instanceof Boolean) return "BOOLEAN";
         if (o instanceof String) return "STRING";
+        if (o instanceof java.time.LocalDate) return "DATE";
+        if (o instanceof java.time.LocalDateTime) return "DATETIME";
+        if (o instanceof java.time.LocalTime) return "TIME";
+        if (o instanceof expr.Delay) return "DELAY";
         return o == null ? "NULL" : o.getClass().getSimpleName();
+    }
+
+    private static final class ArrayModel extends AbstractTableModel {
+
+        private String[][] cells = new String[0][0];
+
+        void setDimension(int rows, int cols) {
+            cells = new String[rows][cols];
+            fireTableStructureChanged();
+        }
+
+        @Override
+        public int getRowCount() {
+            return cells.length;
+        }
+
+        @Override
+        public int getColumnCount() {
+            return cells.length == 0 ? 0 : cells[0].length + 1;
+        }
+
+        @Override
+        public String getColumnName(int col) {
+            return col == 0 ? "#" : String.valueOf(col);
+        }
+
+        @Override
+        public boolean isCellEditable(int row, int col) {
+            return col > 0;
+        }
+
+        @Override
+        public Object getValueAt(int row, int col) {
+            if (col == 0) return row + 1;
+            String s = cells[row][col - 1];
+            return s == null ? "" : s;
+        }
+
+        @Override
+        public void setValueAt(Object value, int row, int col) {
+            if (col > 0) {
+                cells[row][col - 1] = String.valueOf(value).trim();
+            }
+        }
+
+        String getRawValue(int row, int col) {
+            if (col == 0 || row < 0 || row >= cells.length) return "";
+            String s = cells[row][col - 1];
+            return s == null ? "" : s;
+        }
+
+        Cell[][] buildData() {
+            Cell[][] data = new Cell[cells.length][];
+            for (int r = 0; r < cells.length; r++) {
+                data[r] = new Cell[cells[r].length];
+                for (int c = 0; c < cells[r].length; c++) {
+                    data[r][c] = Cell.parse(cells[r][c]);
+                }
+            }
+            return data;
+        }
     }
 }

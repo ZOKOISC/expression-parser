@@ -34,9 +34,9 @@ public class FunctionNode extends Node {
         if (fn == null) {
             throw new ExpressionException("Unknown function: " + name);
         }
-        if (fn.getParameterTypes().length != params.size()) {
+        if (!fn.acceptsParameterCount(params.size())) {
             throw new ExpressionException("Function " + name + " expects "
-                    + fn.getParameterTypes().length + " parameter(s) but got " + params.size() + ".");
+                    + fn.parameterCountDescription() + " but got " + params.size() + ".");
         }
         List<Object> values = new ArrayList<>();
         for (Node p : params) {

@@ -79,7 +79,7 @@ public class OperationsNode extends Node {
                 }
                 return addTerms(cs);
             case MUL:
-                return mulTerms(cs);
+                return expandProducts(mulTerms(cs));
             default:
                 throw new ExpressionException("Unsupported n-ary operation: " + op);
         }
@@ -296,6 +296,169 @@ public class OperationsNode extends Node {
         result.add(new ConstantNode(coeff));
         result.addAll(factors);
         return OperationsNode.of(Operation.MUL, DataType.NUMERIC, result);
+    }
+
+    private static boolean isNumericAdd(Node n) {
+        return n instanceof OperationsNode on && on.getOp() == Operation.ADD
+                && (on.getType() == DataType.NUMERIC || on.getType() == DataType.ANY);
+    }
+
+    private static boolean isMuls(Node n) {
+        return n instanceof OperationsNode on && on.getOp() == Operation.MUL;
+    }
+
+    private static final int EXPAND_CAP = 512;
+
+    private Node expand(Node n) {
+        if (n instanceof OperationsNode on && isNumericAdd(on)) {
+            List<Node> out = new ArrayList<>();
+            for (Node c : on.getChildren()) {
+                Node ex = expand(c);
+                if (isNumericAdd(ex)) {
+                    out.addAll(((OperationsNode) ex).getChildren());
+                } else {
+                    out.add(ex);
+                }
+            }
+            return addTerms(out);
+        }
+        if (n instanceof OperationsNode on && on.getOp() == Operation.MUL) {
+            return expandProducts(on);
+        }
+        return n;
+    }
+
+    private Node expandProducts(Node n) {
+        if (!(n instanceof OperationsNode on) || on.getOp() != Operation.MUL
+                || on.getType() != DataType.NUMERIC) {
+            return n;
+        }
+        List<Node> expanded = new ArrayList<>();
+        boolean anyAdd = false;
+        for (Node f : on.getChildren()) {
+            Node ex = expand(f);
+            expanded.add(ex);
+            if (isNumericAdd(ex)) anyAdd = true;
+        }
+        if (!anyAdd) {
+            return compactPowers(OperationsNode.of(Operation.MUL, DataType.NUMERIC, expanded));
+        }
+        long size = 1;
+        for (Node ex : expanded) {
+            if (isNumericAdd(ex)) {
+                size *= ((OperationsNode) ex).getChildren().size();
+                if (size > EXPAND_CAP) {
+                    return compactPowers(OperationsNode.of(Operation.MUL, DataType.NUMERIC, expanded));
+                }
+            }
+        }
+        List<List<Node>> products = new ArrayList<>();
+        products.add(new ArrayList<>());
+        for (Node ex : expanded) {
+            if (isNumericAdd(ex)) {
+                List<List<Node>> next = new ArrayList<>();
+                OperationsNode add = (OperationsNode) ex;
+                for (List<Node> prod : products) {
+                    for (Node term : add.getChildren()) {
+                        List<Node> np = new ArrayList<>(prod);
+                        np.add(term);
+                        next.add(np);
+                    }
+                }
+                products = next;
+            } else {
+                for (List<Node> prod : products) {
+                    prod.add(ex);
+                }
+            }
+        }
+        List<Node> result = new ArrayList<>();
+        for (List<Node> prod : products) {
+            result.add(mulProduct(prod));
+        }
+        return addTerms(result);
+    }
+
+    private static void collectProductFactors(Node n, double[] coeffRef, List<Node> atoms) {
+        if (n instanceof ConstantNode cn && cn.getType() == DataType.NUMERIC) {
+            coeffRef[0] *= cn.numericValue();
+        } else if (n instanceof UnaryNode u && u.getOp() == Operation.NEG
+                && u.getChild() instanceof ConstantNode cn && cn.getType() == DataType.NUMERIC) {
+            coeffRef[0] *= -cn.numericValue();
+        } else if (n instanceof UnaryNode u && u.getOp() == Operation.RECIP
+                && u.getChild() instanceof ConstantNode cn && cn.getType() == DataType.NUMERIC) {
+            double d = cn.numericValue();
+            if (d == 0) throw new ExpressionException("Division by zero.");
+            coeffRef[0] *= 1.0 / d;
+        } else if (isMuls(n)) {
+            for (Node c : ((OperationsNode) n).getChildren()) {
+                collectProductFactors(c, coeffRef, atoms);
+            }
+        } else {
+            atoms.add(n);
+        }
+    }
+
+    private static Node compactPowers(Node n) {
+        if (!isMuls(n)) {
+            return n;
+        }
+        OperationsNode on = (OperationsNode) n;
+        List<Node> res = new ArrayList<>();
+        LinkedHashMap<String, List<Node>> groups = new LinkedHashMap<>();
+        for (Node c : on.getChildren()) {
+            if (c instanceof ConstantNode cn && cn.getType() == DataType.NUMERIC) {
+                res.add(c);
+                continue;
+            }
+            groups.computeIfAbsent(canonicalKey(c), k -> new ArrayList<>()).add(c);
+        }
+        for (List<Node> g : groups.values()) {
+            if (g.size() == 1) {
+                res.add(g.get(0));
+            } else {
+                res.add(new FunctionNode("pow", List.of(g.get(0), new ConstantNode((double) g.size()))));
+            }
+        }
+        if (res.size() == 1) return res.get(0);
+        return OperationsNode.of(Operation.MUL, DataType.NUMERIC, res);
+    }
+
+    private static Node mulProduct(List<Node> terms) {
+        double[] coeff = { 1.0 };
+        List<Node> atoms = new ArrayList<>();
+        for (Node t : terms) {
+            collectProductFactors(t, coeff, atoms);
+        }
+        if (coeff[0] == 0.0) {
+            return new ConstantNode(0.0);
+        }
+        if (atoms.isEmpty()) {
+            return new ConstantNode(coeff[0]);
+        }
+        List<Node> grouped = new ArrayList<>();
+        LinkedHashMap<String, List<Node>> groups = new LinkedHashMap<>();
+        for (Node a : atoms) {
+            groups.computeIfAbsent(canonicalKey(a), k -> new ArrayList<>()).add(a);
+        }
+        for (List<Node> g : groups.values()) {
+            if (g.size() == 1) {
+                grouped.add(g.get(0));
+            } else {
+                grouped.add(new FunctionNode("pow", List.of(g.get(0), new ConstantNode((double) g.size()))));
+            }
+        }
+        if (coeff[0] == 1.0) {
+            if (grouped.size() == 1) return grouped.get(0);
+            return OperationsNode.of(Operation.MUL, DataType.NUMERIC, grouped);
+        }
+        if (coeff[0] == -1.0 && grouped.size() == 1) {
+            return new UnaryNode(Operation.NEG, grouped.get(0));
+        }
+        List<Node> res = new ArrayList<>();
+        res.add(new ConstantNode(coeff[0]));
+        res.addAll(grouped);
+        return OperationsNode.of(Operation.MUL, DataType.NUMERIC, res);
     }
 
     @Override
