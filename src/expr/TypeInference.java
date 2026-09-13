@@ -47,6 +47,10 @@ public final class TypeInference {
             for (Node p : f.getParams()) {
                 applyVariableTypes(p, vars);
             }
+        } else if (n instanceof IfNode in) {
+            applyVariableTypes(in.getCondition(), vars);
+            applyVariableTypes(in.getWhenTrue(), vars);
+            applyVariableTypes(in.getWhenFalse(), vars);
         }
     }
 
@@ -226,6 +230,16 @@ if (n instanceof OperationsNode on) {
                     result = DataType.ANY;
             }
             b.setType(result);
+            return result;
+        }
+        if (n instanceof IfNode in) {
+            require(vars, in.getCondition(), DataType.BOOLEAN);
+            DataType tt = inferNode(in.getWhenTrue(), vars, registry);
+            DataType ft = inferNode(in.getWhenFalse(), vars, registry);
+            DataType result = (tt == DataType.ANY) ? ft
+                    : (ft == DataType.ANY || tt == ft) ? tt
+                    : DataType.ANY;
+            in.setType(result);
             return result;
         }
         if (n instanceof FunctionNode f) {

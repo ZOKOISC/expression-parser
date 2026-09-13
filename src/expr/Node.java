@@ -42,6 +42,8 @@ public abstract class Node {
                 return OperationsNode.fromXml(el);
             case "FUNCTION":
                 return FunctionNode.fromXml(el);
+            case "IF":
+                return IfNode.fromXml(el);
             default:
                 throw new ExpressionException("Unknown XML node kind: " + kind);
         }

@@ -37,6 +37,17 @@ public class Main {
         check("not not true", null, true);
         check("10 > 3 && 2 <= 2", null, true);
 
+        // if(condition, whenTrue, whenFalse) checks
+        check("if(3 > 2, 'yes', 'no')", null, "yes");
+        check("if(3 < 2, 'yes', 'no')", null, "no");
+        check("if(1 == 1, 100, 200)", null, 100.0);
+        check("if(1 != 1, 100, 200)", null, 200.0);
+        check("if(true && 2 > 1, 'both', 'x')", null, "both");
+        check("if(true, 5, 1/0)", null, 5.0);
+        check("if(false, 1/0, 7)", null, 7.0);
+        check("if(0 == 0, 'equal', 'not') & '!'", null, "equal!");
+        check("if(2 > 1, 'a', 'b') = 'a'", null, true);
+
         check("3*x + 2*5", var("x", 4.0), 22.0);
         check("a + b + a + 5", var("a", 1.0, "b", 2.0), 9.0);
         check("x > 3 && x < 10", var("x", 7.0), true);

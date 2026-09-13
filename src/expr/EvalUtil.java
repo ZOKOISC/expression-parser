@@ -201,6 +201,18 @@ public final class EvalUtil {
                 + (o == null ? "null" : o + " (" + o.getClass().getSimpleName() + ")"));
     }
 
+    public static DataType valueType(Object o) {
+        if (o == null) return DataType.ANY;
+        if (o instanceof Number) return DataType.NUMERIC;
+        if (o instanceof Boolean) return DataType.BOOLEAN;
+        if (o instanceof String) return DataType.STRING;
+        if (o instanceof LocalDate) return DataType.DATE;
+        if (o instanceof LocalDateTime) return DataType.DATETIME;
+        if (o instanceof LocalTime) return DataType.TIME;
+        if (o instanceof Delay) return DataType.ANY;
+        return DataType.ANY;
+    }
+
     public static String asString(Object o) {
         if (o instanceof String s) return s;
         if (o instanceof Double d) return format(d);

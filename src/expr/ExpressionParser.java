@@ -283,6 +283,25 @@ public class ExpressionParser {
                 String name = t.text;
                 if (name.equalsIgnoreCase("true")) return new ConstantNode(Boolean.TRUE);
                 if (name.equalsIgnoreCase("false")) return new ConstantNode(Boolean.FALSE);
+                if (name.equalsIgnoreCase("if")) {
+                    if (peek().type != TokenType.LPAREN) {
+                        throw new ExpressionException("Expected '(' after 'if'.");
+                    }
+                    next();
+                    Node cond = parseOr();
+                    if (peek().type != TokenType.COMMA) {
+                        throw new ExpressionException("Expected ',' after the condition in 'if(...)'.");
+                    }
+                    next();
+                    Node whenTrue = parseOr();
+                    if (peek().type != TokenType.COMMA) {
+                        throw new ExpressionException("Expected ',' after the true-branch in 'if(...)'.");
+                    }
+                    next();
+                    Node whenFalse = parseOr();
+                    expect(TokenType.RPAREN);
+                    return new IfNode(cond, whenTrue, whenFalse);
+                }
                 if (peek().type == TokenType.LPAREN) {
                     next();
                     List<Node> args = new ArrayList<>();
