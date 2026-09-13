@@ -4,6 +4,8 @@ import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.Map;
 
+import javax.swing.SwingUtilities;
+
 import expr.Delay;
 import expr.EvalUtil;
 import expr.Expression;
@@ -219,6 +221,9 @@ public class Main {
 
         System.out.println();
         System.out.println("All checks passed.");
+
+        System.out.println("Launching GUI...");
+        SwingUtilities.invokeLater(Gui::new);
     }
 
     private static void check(String expr, Map<String, Object> bindings, Object expected) {

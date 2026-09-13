@@ -5,22 +5,24 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
-import javax.swing.table.AbstractTableModel;
 import javax.swing.event.TableModelEvent;
+import javax.swing.table.AbstractTableModel;
 
 import expr.EvalUtil;
 import expr.Expression;
@@ -39,6 +41,7 @@ public class Gui {
     private final JLabel status = new JLabel(" ");
     private final JTextField rowsField = new JTextField("3", 3);
     private final JTextField colsField = new JTextField("3", 3);
+    private final Map<String, Object> bindings = new LinkedHashMap<>();
     private final ArrayTable arrayTable = new ArrayTable();
     private final FunctionRegistry registry;
     private final ArrayModel arrayModel = new ArrayModel();
@@ -112,7 +115,6 @@ public class Gui {
         buttons.add(btnParse);
         buttons.add(btnOptimise);
         buttons.add(btnEvaluate);
-
         c.gridy = 4;
         form.add(buttons, c);
 
@@ -141,10 +143,12 @@ public class Gui {
                 + " 2024-01-15 (date), 2024-01-15 10:30:00 (datetime), 23:59:59 (time)."
                 + "<br>Empty cell / out-of-range index -&gt; warning, result null.</html>"), c);
 
+        JTabbedPane tabs = new JTabbedPane();
+        tabs.addTab("Array Grid", arrayScroll);
+        tabs.addTab("Output", new JScrollPane(output));
+
         JPanel center = new JPanel(new BorderLayout());
-        center.setBorder(BorderFactory.createEmptyBorder(0, 8, 8, 8));
-        center.add(new JLabel("Output (XML / result):"), BorderLayout.NORTH);
-        center.add(new JScrollPane(output), BorderLayout.CENTER);
+        center.add(tabs, BorderLayout.CENTER);
 
         JFrame frame = new JFrame("Expression Parser");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -188,20 +192,17 @@ public class Gui {
             Warnings.clear();
             Expression expr = Expression.parse(exprField.getText(), registry);
             Object result = expr.evaluate(parseBindings(varsArea.getText()));
-            StringBuilder sb = new StringBuilder();
-            sb.append("Result: ").append(result == null ? "(null)" : EvalUtil.asString(result));
-            sb.append("\n\nData type: ").append(typeName(result));
-            List<String> warnings = Warnings.get();
+            output.setText("Result: " + (result == null ? "(null)" : EvalUtil.asString(result)));
+            java.util.List<String> warnings = Warnings.get();
             if (!warnings.isEmpty()) {
-                sb.append("\n\nWarnings (").append(warnings.size()).append("):");
-                for (String w : warnings) {
-                    sb.append("\n- ").append(w);
-                }
                 setStatus("Evaluated, with " + warnings.size() + " warning(s).");
+                output.append("\n\nWarnings (" + warnings.size() + "):");
+                for (String w : warnings) {
+                    output.append("\n- " + w);
+                }
             } else {
                 setStatus("Evaluated OK.");
             }
-            output.setText(sb.toString());
         } catch (Exception ex) {
             showError(ex);
         }
