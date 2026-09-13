@@ -1,4 +1,4 @@
-﻿package functions.custom;
+package functions.custom;
 
 import java.awt.Color;
 import java.time.LocalDate;
@@ -8,13 +8,19 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
-import expr.ConstantNode;
 import expr.DataType;
 import expr.EvalUtil;
-import expr.ExpressionException;
 import expr.Node;
+import expr.ExpressionException;
 
+/**
+ * A spreadsheet cell. Holds an optional parsed expression tree (Node),
+ * a value per its DataType, raw input text, style (bold / colors) and a list
+ * of {@link CellRef} dependents (cells whose expressions refer to this cell).
+ */
 public class Cell {
 
     public static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
@@ -23,8 +29,8 @@ public class Cell {
 
     private final DataType type;
     private final Object value;
-    private final String rawText;
-    private final Node expression;
+    private final Node expressionimar;
+    private final String rawTextph;
     private final List<CellRef> dependents = new ArrayList<>();
 
     private boolean bold;
@@ -46,10 +52,18 @@ public class Cell {
         return new Cell(DataType.STRING, null);
     }
 
-    public static Cell expression(Node expression, String rawText) {
-        DataType t = expression == null ? DataType.ANY : TypeInference.infer(expression);
-        Object v = expression == null ? null : expression.constantValue();
-        return new Cell(t, v, expression, rawText);
+    public static Cell expression(Node node, String rawText) {
+        if (node == null) {
+            return empty();
+        }
+        Object v;
+        try {
+            v = node.evaluate(Map.of(), null);
+        } catch (RuntimeException ex) {
+            v = null;
+        }
+        DataType vt = v == null ? DataType.ANY : EvalUtil.valueType(v);
+        return new Cell(vt, v, node, rawText);
     }
 
     public DataType getType() {
@@ -60,16 +74,16 @@ public class Cell {
         return value;
     }
 
-    public String getRawText() {
-        return rawText;
-    }
-
     public Node getExpression() {
         return expression;
     }
 
     public boolean hasExpression() {
         return expression != null;
+    }
+
+    public String getRawText() {
+        return rawText == null ? "" : rawText;
     }
 
     public boolean isEmpty() {
@@ -105,13 +119,15 @@ public class Cell {
     }
 
     public void addDependent(CellRef ref) {
-        if (!dependents.contains(ref)) {
-            dependents.add(ref);
+        if (ref == null) {
+            return;
         }
-    }
-
-    public DataType getDataType() {
-        return type;
+        for (CellRef existing : dependents) {
+            if (existing.equals(ref)) {
+                return;
+            }
+        }
+        dependents.add(ref);
     }
 
     public String display() {
@@ -121,18 +137,36 @@ public class Cell {
         if (value instanceof LocalDate d) {
             return d.format(DATE_FMT);
         }
-        if (value instanceof LocalDateTime d) {
-            return d.format(DATETIME_FMT);
+        if (value instanceof LocalDateTime dt) {
+            return dt.format(DATETIME_FMT);
         }
         if (value instanceof LocalTime t) {
             return t.format(TIME_FMT);
         }
-        if (value instanceof Double d) {
-            return EvalUtil.format(d);
+        if (value instanceof Double dd) {
+            return EvalUtil.format(dd);
+        }
+        if (value instanceof Boolean b) {
+            return Boolean.toString(b);
         }
         return String.valueOf(value);
     }
 
+    public String toTextValue() {
+        return display();
+    }
+
+    /**
+     * Parses a cell from raw user input. Rules:
+     * <ul>
+     *   <li>quoted text (single or double quotes) {@code ->} String</li>
+     *   <li>{@code true}/{@code false} {@code ->} BOOLEAN</li>
+     *   <li>date / datetime / time patterns {@code ->} those types</li>
+     *   <li>a single {@code 0} {@code ->} NUMERIC zero (constant 0-rule)</li>
+     *   <li>a {@code 0} followed by digits ({@code 01}, {@code 0123}) {@code ->} String</li>
+     *   <li>a parsable double {@code ->} NUMERIC, otherwise String</li>
+     * </ul>
+     */
     public static Cell parse(String s) {
         if (s == null) {
             return empty();
@@ -168,67 +202,41 @@ public class Cell {
         } catch (DateTimeParseException ignored) {
             // not a time literal
         }
-        if (t.length() > 1 && t.charAt(0) == '0' && isAllDigits(t.substring(1))) {
+        if (t.equals("0")) {
+            return new Cell(DataType.NUMERIC, 0.0);
+        }
+        if (t.length() >= 2 && t.charAt(0) == '0' && isAllDigits(t.substring(1))) {
             return new Cell(DataType.STRING, t);
         }
         try {
             return new Cell(DataType.NUMERIC, Double.parseDouble(t));
         } catch (NumberFormatException ignored) {
-            // not a number
+            // not a numeric literal
         }
         return new Cell(DataType.STRING, t);
     }
 
     private static boolean isAllDigits(String s) {
+        if (s.isEmpty()) {
+            return false;
+        }
         for (int i = 0; i < s.length(); i++) {
             if (!Character.isDigit(s.charAt(i))) {
                 return false;
             }
         }
-        return !s.isEmpty();
+        return true;
     }
 
-    private static final Map<String, DataType> PATTERNS = new LinkedHashMap<>();
-
-    static {
-        PATTERNS.put("yyyy-MM-dd HH:mm:ss", DataType.DATETIME);
-        PATTERNS.put("yyyy-MM-dd", DataType.DATE);
-        PATTERNS.put("HH:mm:ss", DataType.TIME);
-    }
-
-    public static Cell parseInto(DataType target, String s) {
-        Cell c = parse(s);
-        if (c.getType() == target) {
-            return c;
-        }
-        if (target == DataType.STRING) {
-            return new Cell(DataType.STRING, c.toTextValue());
-        }
-        throw new ExpressionException("Cannot convert '" + s + "' to " + target.name());
-    }
-
-    public String toTextValue() {
-        if (value == null) {
-            return "";
-        }
-        if (value instanceof LocalDate d) {
-            return d.format(DATE_FMT);
-        }
-        if (value instanceof LocalDateTime d) {
-            return d.format(DATETIME_FMT);
-        }
-        if (value instanceof LocalTime t) {
-            return t.format(TIME_FMT);
-        }
-        if (value instanceof Double d) {
-            return EvalUtil.format(d);
-        }
-        if (value instanceof Boolean b) {
-            return b ? "true" : "false";
-        }
-        return String.valueOf(value);
-    }
-
+    /**
+     * Converts this cell to a new cell of the given target type using the
+     * datatype-change conversion rules:
+     * <ul>
+     *   <li>{@code X -> STRING}: numeric {@code ->} text, logical {@code ->} "true"/"false",
+     *       date/datetime/time {@code ->} pattern string</li>
+     *   <li>{@code STRING -> X}: only when the cell content matches the target pattern</li>
+     * </ul>
+     */
     public Cell convertTo(DataType target) {
         if (target == type) {
             return this;
@@ -237,16 +245,52 @@ public class Cell {
             return new Cell(DataType.STRING, toTextValue());
         }
         if (type == DataType.STRING) {
-            Cell parsed = parse((String) value);
+            String text = value == null ? "" : String.valueOf(value);
+            Cell parsed = parse(text);
             if (parsed.getType() == target) {
                 return new Cell(target, parsed.getValue());
             }
-            throw new ExpressionException("Cell content '" + value + "' cannot be interpreted as " + target.name() + ".");
+            throw new ExpressionException("Cannot convert string '" + text + "' to " + target.name() + ": content does not match the pattern.");
         }
-        throw new ExpressionException("Cannot convert cell of type " + type.name() + " to " + target.name() + ".");
+        if (target == DataType.NUMERIC && (value instanceof Number)) {
+            return new Cell(DataType.NUMERIC, ((Number) value).doubleValue());
+        }
+        if (target == DataType.NUMERIC && (value instanceof Boolean b)) {
+            return new Cell(DataType.NUMERIC, b ? 1.0 : 0.0);
+        }
+        if (target == DataType.BOOLEAN && (value instanceof Number n)) {
+            return new Cell(DataType.BOOLEAN, n.doubleValue() != 0.0);
+        }
+        throw new ExpressionException("Cannot change type of cell from " + type.name() + " to " + target.name() + ".");
     }
 
-    public static class CellRef {
+    public String getTypeName() {
+        return type.name();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof Cell that)) {
+            return false;
+        }
+        return type == that.type && Objects.equals(value, that.value);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(type, value);
+    }
+
+    @Override
+    public String toString() {
+        return display();
+    }
+
+    /** Immutable reference to a grid cell location (row, col). */
+    public static final class CellRef {
         private final int row;
         private final int col;
 
@@ -265,13 +309,23 @@ public class Cell {
 
         @Override
         public boolean equals(Object o) {
-            if (!(o instanceof CellRef other)) return false;
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof CellRef other)) {
+                return false;
+            }
             return row == other.row && col == other.col;
         }
 
         @Override
         public int hashCode() {
             return 31 * row + col;
+        }
+
+        @Override
+        public String toString() {
+            return "(" + row + "," + col + ")";
         }
     }
 }
