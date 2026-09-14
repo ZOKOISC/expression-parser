@@ -5,6 +5,8 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -12,6 +14,9 @@ import java.util.Map;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
+import javax.swing.JMenu;
+import javax.swing.JMenuItem;
+import javax.swing.JPopupMenu;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -84,6 +89,16 @@ public class Gui {
                 typeLabel.setText(cell.isEmpty() ? " " : "Cell (" + (e.getFirstRow() + 1) + ","
                         + e.getColumn() + ") type: " + cell.getType().name());
                 recomputeDependentsOnEdit(e.getFirstRow(), e.getColumn());
+            }
+        });
+        arrayGrid.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger()) showCellMenu(e);
+            }
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger()) showCellMenu(e);
             }
         });
 
@@ -209,6 +224,44 @@ public class Gui {
         }
     }
 
+    private void showCellMenu(MouseEvent e) {
+        int row = arrayGrid.rowAtPoint(e.getPoint());
+        int col = arrayGrid.columnAtPoint(e.getPoint());
+        if (row < 0 || col <= 0) return;
+        String raw = arrayModel.getRawValue(row, col);
+        Cell cell = Cell.parse(raw);
+        JPopupMenu menu = new JPopupMenu();
+        JMenu typeMenu = new JMenu("Convert type");
+        for (expr.DataType dt : expr.DataType.values()) {
+            if (dt == expr.DataType.ANY) continue;
+            JMenuItem item = new JMenuItem(dt.name());
+            item.addActionListener(ev -> {
+                try {
+                    Cell converted = cell.convertTo(dt);
+                    arrayModel.setValueAt(converted.getRawText(), row, col);
+                    recomputeDependentsOnEdit(row, col);
+                } catch (Exception ex) {
+                    showError(ex);
+                }
+            });
+            typeMenu.add(item);
+        }
+        menu.add(typeMenu);
+        JMenuItem clear = new JMenuItem("Clear cell");
+        clear.addActionListener(ev -> {
+            try {
+                arrayModel.setValueAt("", row, col);
+                recomputeDependentsOnEdit(row, col);
+            } catch (Exception ex) {
+                showError(ex);
+            }
+        });
+        menu.add(clear);
+        JMenuItem recompute = new JMenuItem("Recompute dependents");
+        recompute.addActionListener(ev -> recomputeDependentsOnEdit(row, col));
+        menu.add(recompute);
+        menu.show(arrayGrid, e.getX(), e.getY());
+    }
     private void recomputeDependentsOnEdit(int row, int col) {
         try {
             arrayTable.setData(arrayModel.buildData());
