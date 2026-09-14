@@ -83,6 +83,7 @@ public class Gui {
                 Cell cell = Cell.parse(raw);
                 typeLabel.setText(cell.isEmpty() ? " " : "Cell (" + (e.getFirstRow() + 1) + ","
                         + e.getColumn() + ") type: " + cell.getType().name());
+                recomputeDependentsOnEdit(e.getFirstRow(), e.getColumn());
             }
         });
 
@@ -203,6 +204,17 @@ public class Gui {
             } else {
                 setStatus("Evaluated OK.");
             }
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    private void recomputeDependentsOnEdit(int row, int col) {
+        try {
+            arrayTable.setData(arrayModel.buildData());
+            Warnings.clear();
+            doEvaluate();
+            setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed.");
         } catch (Exception ex) {
             showError(ex);
         }
