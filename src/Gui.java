@@ -5,6 +5,7 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.GridLayout;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 
@@ -16,6 +17,7 @@ import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
 import javax.swing.JPopupMenu;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -238,7 +240,10 @@ public class Gui {
             item.addActionListener(ev -> {
                 try {
                     Cell converted = cell.convertTo(dt);
-                    arrayModel.setValueAt(converted.getRawText(), row, col);
+                    String storedText = converted.getType() == expr.DataType.STRING
+                            ? "\"" + converted.display() + "\""
+                            : converted.getRawText();
+                    arrayModel.setValueAt(storedText, row, col);
                     recomputeDependentsOnEdit(row, col);
                 } catch (Exception ex) {
                     showError(ex);
@@ -247,6 +252,9 @@ public class Gui {
             typeMenu.add(item);
         }
         menu.add(typeMenu);
+        JMenuItem editCell = new JMenuItem("Edit cell content...");
+        editCell.addActionListener(ev -> showEditDialog(row, col, cell));
+        menu.add(editCell);
         JMenuItem clear = new JMenuItem("Clear cell");
         clear.addActionListener(ev -> {
             try {
@@ -262,6 +270,36 @@ public class Gui {
         menu.add(recompute);
         menu.show(arrayGrid, e.getX(), e.getY());
     }
+    private void showEditDialog(int row, int col, Cell cell) {
+        JTextField exprField = new JTextField(cell.isEmpty() ? "" : cell.getRawText());
+        JTextField valField = new JTextField(cell.isEmpty() ? "" : cell.display());
+        JLabel typeLabel = new JLabel("DataType: " + (cell.isEmpty() ? "NONE" : cell.getType().name()));
+        JPanel panel = new JPanel(new GridLayout(0, 2, 6, 6));
+        panel.add(new JLabel("Expression:"));
+        panel.add(exprField);
+        panel.add(new JLabel("Actual value (toString):"));
+        panel.add(valField);
+        panel.add(new JLabel("DataType:"));
+        panel.add(typeLabel);
+        int opt = JOptionPane.showConfirmDialog(arrayGrid, panel,
+                "Edit cell content - row " + row + ", col " + col + (cell.isEmpty() ? " (empty)" : ""),
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (opt == JOptionPane.OK_OPTION) {
+            try {
+                String text = exprField.getText();
+                if (text.trim().isEmpty()) {
+                    text = valField.getText();
+                }
+                if (!text.isEmpty()) {
+                    arrayModel.setValueAt(text, row, col);
+                    recomputeDependentsOnEdit(row, col);
+                }
+            } catch (Exception ex) {
+                showError(ex);
+            }
+        }
+    }
+
     private void recomputeDependentsOnEdit(int row, int col) {
         try {
             arrayTable.setData(arrayModel.buildData());
