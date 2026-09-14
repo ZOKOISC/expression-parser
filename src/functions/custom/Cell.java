@@ -29,8 +29,8 @@ public class Cell {
 
     private final DataType type;
     private final Object value;
-    private final Node expressionimar;
-    private final String rawTextph;
+    private final Node expression;
+    private final String rawText;
     private final List<CellRef> dependents = new ArrayList<>();
 
     private boolean bold;
