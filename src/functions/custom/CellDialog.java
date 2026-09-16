@@ -9,7 +9,16 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.io.StringWriter;
 
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+
+import org.w3c.dom.Document;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JDialog;
@@ -54,6 +63,7 @@ public class CellDialog extends JDialog {
     private int selfRow = -1;
     private int selfCol = -1;
 	private List<CellRef>  referencedCells;
+	private Node lastNode;
 	
     public CellDialog(Frame owner, Cell cell, FunctionRegistry registry, Map<String, Object> bindings) {
         super(owner, "Edit cell value", true);
@@ -129,8 +139,14 @@ public class CellDialog extends JDialog {
 		else 
             exprArea.setText(rawExpression);
         dataType = cell.getType();
-		dataTypeField.setText(dataType.name());
-        refreshTabs();
+        dataTypeField.setText(dataType.name());
+        Node saved = cell.getExpression();
+        if (saved != null) {
+            stringArea.setText(saved.toText());
+            xmlArea.setText(nodeXml(saved));
+        } else {
+            refreshTabs();
+        }
 	}
     private void refreshTabs() {
         String text = exprArea.getText();
@@ -167,6 +183,7 @@ public class CellDialog extends JDialog {
         try {
             Expression e = Expression.parse(text, registry);
             Node optimized = e.getOptimized();
+			lastNode = optimized;
             exprArea.setText(text);
             stringArea.setText(optimized == null ? "" : optimized.toText());
             xmlArea.setText(e.toOptimizedXml());
@@ -203,16 +220,15 @@ public class CellDialog extends JDialog {
     }
 
     private void doSave() {
-        String text = valueField.getText();
-        if (text != null && !text.trim().isEmpty()) {
+        String raw = exprArea.getText();
+        if (raw != null && !raw.trim().isEmpty()) {
             try {
-                Expression.parse(text, registry);
-            } catch (Exception ex) {
-                JOptionPane.showMessageDialog(this,
-                        "Not a valid expression: " + ex.getMessage(),
-                        "Cannot save", JOptionPane.ERROR_MESSAGE);
-                return;
+                lastNode = Expression.parse(raw, registry).getOptimized();
+            } catch (Exception ignored) {
+                lastNode = null;
             }
+        } else {
+            lastNode = null;
         }
         saved = true;
         dispose();
@@ -233,6 +249,25 @@ public class CellDialog extends JDialog {
     }
 	public List<CellRef> getEditedReferencedCells(){
         return referencedCells;
+    }
+    public Node getEditedNode() {
+        return lastNode;
+    }
+
+    private String nodeXml(Node node) {
+        try {
+            DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+            Document doc = dbf.newDocumentBuilder().newDocument();
+            doc.appendChild(node.toXml(doc));
+            Transformer t = TransformerFactory.newInstance().newTransformer();
+            t.setOutputProperty(OutputKeys.INDENT, "yes");
+            t.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+            StringWriter sw = new StringWriter();
+            t.transform(new DOMSource(doc), new StreamResult(sw));
+            return sw.toString();
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
     }
     public void setPosition(int row, int col) {
         selfRow = row;

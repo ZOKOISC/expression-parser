@@ -289,6 +289,7 @@ public class Gui {
             Cell saved = Cell.parse(text == null ? "" : text);
             saved.setRawExpression(dlg.getEditedRawExpression());
             saved.setType(dlg.getEditedDataType());
+			saved.setExpression(dlg.getEditedNode());
             saved.setReferenced(dlg.getEditedReferencedCells());
             cellMap.put(cellKey(row, col), saved);
             recomputeDependentsOnEdit(row, col);

@@ -70,6 +70,10 @@ public class Cell {
         return new Cell(vt, v, node, v.toString(), rawExpression);
     }
 
+    public void setExpression(Node expression) {
+        this.expression = expression;
+    }
+	
     public DataType getType() {
         return type;
     }
