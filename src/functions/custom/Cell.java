@@ -52,7 +52,7 @@ public class Cell {
     }
 
     public static Cell empty() {
-        return new Cell(DataType.STRING, null);
+        return new Cell(DataType.ANY, null);
     }
 
     public static Cell expression(Node node, String rawExpression) {
@@ -72,6 +72,10 @@ public class Cell {
     public DataType getType() {
         return type;
     }
+	public void getType(DataType type) {
+        this.type = type;
+    }
+
 
     public Object getValue() {
         return value;
@@ -275,7 +279,11 @@ public class Cell {
         throw new ExpressionException("Cannot change type of cell from " + type.name() + " to " + target.name() + ".");
     }
 
-    public String getTypeName() {
+    public void setType(DataType type) {
+        this.type = type;
+    }
+
+	public String getTypeName() {
         return type.name();
     }
 

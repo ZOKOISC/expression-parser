@@ -34,6 +34,7 @@ import javax.swing.table.AbstractTableModel;
 
 import expr.EvalUtil;
 import expr.Expression;
+import expr.DataType;
 import functions.FunctionRegistry;
 import functions.MathFunctions;
 import functions.Warnings;
@@ -237,7 +238,7 @@ public class Gui {
         JPopupMenu menu = new JPopupMenu();
         JMenu typeMenu = new JMenu("Convert type");
         for (expr.DataType dt : expr.DataType.values()) {
-            if (dt == expr.DataType.ANY) continue;
+            if (dt == expr.DataType.ANY || dt == cell.getType()) continue;
             JMenuItem item = new JMenuItem(dt.name());
             item.addActionListener(ev -> {
                 try {
@@ -285,7 +286,8 @@ public class Gui {
                 recomputeDependentsOnEdit(row, col);
             }
             cell.setRawExpression(rawExpression);
-       }
+            cell.setType(dlg.getEditedDataType());
+        }
     }
 
     private void recomputeDependentsOnEdit(int row, int col) {

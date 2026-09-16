@@ -34,6 +34,7 @@ import functions.FunctionRegistry;
 public class CellDialog extends JDialog {
 
     private final JTextField valueField = new JTextField(42);
+    private final JTextField dataTypeField = new JTextField(8);
     private final JLabel posLabel = new JLabel(" ");
     private final JLabel typeLabel = new JLabel(" ");
     private final JTextArea exprArea = new JTextArea(6, 55);
@@ -42,6 +43,7 @@ public class CellDialog extends JDialog {
     private final Cell cell;
     private final FunctionRegistry registry;
     private final Map<String, Object> bindings;
+	private DataType dataType;
     private boolean saved;
     private int selfRow = -1;
     private int selfCol = -1;
@@ -86,7 +88,7 @@ public class CellDialog extends JDialog {
         valueRow.add(new JLabel("Value:"));
         valueRow.add(valueField);
         valueRow.add(new JLabel("DataType:"));
-        valueRow.add(typeLabel);
+        valueRow.add(dataTypeField);
 
         JButton cancel = new JButton("CANCEL");
         JButton save = new JButton("SAVE");
@@ -105,16 +107,22 @@ public class CellDialog extends JDialog {
         setLocationRelativeTo(owner);
     }
 	private void initDialog(){
-        if (cell != null) {
-            Object v = cell.getValue();
-            valueField.setText(v == null ? "" : String.valueOf(v));
+		if (cell == null){
+            valueField.setText("");
+			dataTypeField.setText(DataType.ANY.name());
+			exprArea.setText("");
+            refreshTabs();
+			return;
         }
-        if (cell != null && cell.getTypeName() != null) {
-            typeLabel.setText(cell.getTypeName());
-        }
-        if (cell != null && cell.getRawExpression() != null) {
-            exprArea.setText(cell.getRawExpression());
-        }
+		Object v = cell.getValue();
+		String rawExpression = cell.getRawExpression();
+        valueField.setText(v == null ? "" : String.valueOf(v));
+        if (rawExpression == null) 
+			exprArea.setText("");
+		else 
+            exprArea.setText(rawExpression);
+        dataType = cell.getType();
+		dataTypeField.setText(dataType.name());
         refreshTabs();
 	}
     private void refreshTabs() {
@@ -164,6 +172,10 @@ public class CellDialog extends JDialog {
             }
             Object result = e.evaluate(bindings);
             valueField.setText(result == null ? "[ERROR] null" : String.valueOf(result));
+			if (dataType.equals(DataType.ANY) && result != null){
+				dataType = DataType.getDefault(String.valueOf(result));
+				dataTypeField.setText(dataType.name());
+            }
             if (optimized != null && optimized.getType() != null
                     && optimized.getType() != DataType.ANY) {
                 typeLabel.setText(optimized.getType().name());
@@ -206,7 +218,9 @@ public class CellDialog extends JDialog {
     public String getEditedRawExpression() {
         return exprArea.getText();
     }
-
+    public DataType getEditedDataType() {
+        return dataType;
+    }
     public void setPosition(int row, int col) {
         selfRow = row;
         selfCol = col;
