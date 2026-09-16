@@ -287,6 +287,7 @@ public class Gui {
             }
             cell.setRawExpression(rawExpression);
             cell.setType(dlg.getEditedDataType());
+			cell.setReferenced(dlg.getEditedReferencedCells())
         }
     }
 

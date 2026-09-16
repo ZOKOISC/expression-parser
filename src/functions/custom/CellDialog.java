@@ -47,7 +47,8 @@ public class CellDialog extends JDialog {
     private boolean saved;
     private int selfRow = -1;
     private int selfCol = -1;
-
+	private List<CellRef>  referencedCells;
+	
     public CellDialog(Frame owner, Cell cell, FunctionRegistry registry, Map<String, Object> bindings) {
         super(owner, "Edit cell value", true);
         this.cell = cell;
@@ -175,6 +176,7 @@ public class CellDialog extends JDialog {
 			if (dataType.equals(DataType.ANY) && result != null){
 				dataType = DataType.getDefault(String.valueOf(result));
 				dataTypeField.setText(dataType.name());
+				referencedCells = collectReferenced(optimized, selfRow, selfCol);
             }
             if (optimized != null && optimized.getType() != null
                     && optimized.getType() != DataType.ANY) {
@@ -220,6 +222,9 @@ public class CellDialog extends JDialog {
     }
     public DataType getEditedDataType() {
         return dataType;
+    }
+	public List<CellRef> getEditedReferencedCells(){
+        return referencedCells;
     }
     public void setPosition(int row, int col) {
         selfRow = row;

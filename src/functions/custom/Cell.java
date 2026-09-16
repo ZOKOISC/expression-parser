@@ -32,8 +32,8 @@ public class Cell {
     private final Node expression;
     private String textValue;
     private String rawExpression;
-    private final List<CellRef> dependents = new ArrayList<>();
-    private final List<CellRef> referenced = new ArrayList<>();
+    private List<CellRef> dependents = new ArrayList<>();
+    private List<CellRef> referenced = new ArrayList<>();
 
     private boolean bold;
     private Color background;
@@ -76,6 +76,21 @@ public class Cell {
         this.type = type;
     }
 
+    public void setReferenced(List<CellRef> refs) {
+        referenced.clear();
+        if (refs != null) {
+            referenced.addAll(refs);
+        }
+    }
+     public void setDependents(List<CellRef> refs) {
+        dependents.clear();
+        if (refs != null) {
+            dependents.addAll(refs);
+        }
+    }
+    public List<CellRef> getDependents() {
+        return dependents;
+    }
 
     public Object getValue() {
         return value;
