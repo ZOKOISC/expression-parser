@@ -29,8 +29,8 @@ public class Cell {
     public static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private DataType type;
-    private final Object value;
-    private final Node expression;
+    private Object value;
+    private Node expression;
     private String textValue;
     private String rawExpression;
     private List<CellRef> dependents = new ArrayList<>();
