@@ -157,7 +157,8 @@ public class CellDialog extends JDialog {
             refArea.setText(refs.isEmpty() ? "" : refs.toString());
         } else {
             refreshTabs();
-        }	}
+        }
+	}
     private void refreshTabs() {
         String text = exprArea.getText();
         if (text == null || text.trim().isEmpty()) {
@@ -171,7 +172,9 @@ public class CellDialog extends JDialog {
             Node optimized = e.getOptimized();
             stringArea.setText(optimized == null ? "" : optimized.toText());
             xmlArea.setText(e.toOptimizedXml());
-        } catch (Exception ex) {
+            List<CellRef> refs = optimized == null
+                    ? new ArrayList<>() : optimized.collectReferenced();
+            refArea.setText(refs.isEmpty() ? "" : refs.toString());        } catch (Exception ex) {
             stringArea.setText("");
             xmlArea.setText("Error: " + ex.getMessage());
         }

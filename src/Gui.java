@@ -280,7 +280,7 @@ public class Gui {
     }
     private void showEditDialog(int row, int col, Cell cell) {
         CellDialog dlg = new CellDialog((Frame) SwingUtilities.getWindowAncestor(arrayGrid),
-                cell, registry, bindings);
+                cell, registry, parseBindings(varsArea.getText()));
 		dlg.setPosition(row,col);
         dlg.setVisible(true);
         if (dlg.wasSaved()) {
