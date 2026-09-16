@@ -417,6 +417,7 @@ public class Gui {
         public void setValueAt(Object value, int row, int col) {
             if (col > 0) {
                 cells[row][col - 1] = String.valueOf(value).trim();
+                fireTableCellUpdated(row, col);
             }
         }
 
