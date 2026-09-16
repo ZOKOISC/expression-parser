@@ -29,6 +29,11 @@ import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import javax.swing.ActionMap;
+import javax.swing.JComponent;
+import javax.swing.text.DefaultEditorKit;
 
 import expr.CellRef;
 import expr.DataType;
@@ -77,6 +82,9 @@ public class CellDialog extends JDialog {
             a.setLineWrap(true);
             a.setWrapStyleWord(true);
         }
+        addTextPopup(valueField);
+        addTextPopup(dataTypeField);
+        addTextPopup(exprArea);
         valueField.setFont(mono);
 
 		initDialog();
@@ -277,5 +285,24 @@ public class CellDialog extends JDialog {
     }
     public void setDataType(String name) {
         typeLabel.setText(name == null ? " " : name);
+    }
+    private static void addTextPopup(JComponent comp) {
+        ActionMap am = comp.getActionMap();
+        JPopupMenu menu = new JPopupMenu();
+        menu.add(am.get(DefaultEditorKit.cutAction));
+        menu.add(am.get(DefaultEditorKit.copyAction));
+        menu.add(am.get(DefaultEditorKit.pasteAction));
+        menu.addSeparator();
+        menu.add(am.get(DefaultEditorKit.selectAllAction));
+        comp.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger()) menu.show(comp, e.getX(), e.getY());
+            }
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger()) menu.show(comp, e.getX(), e.getY());
+            }
+        });
     }
 }
