@@ -279,11 +279,12 @@ public class Gui {
         dlg.setVisible(true);
         if (dlg.wasSaved()) {
             String text = dlg.getEditedText();
+			String rawExpression = dlg.getEditedRawExpression();
             if (text != null && !text.trim().isEmpty()) {
                 arrayModel.setValueAt(text, row, col);
                 recomputeDependentsOnEdit(row, col);
             }
-            cell.setRawExpression(dlg.getEditedRawExpression());
+            cell.setRawExpression(rawExpression);
        }
     }
 

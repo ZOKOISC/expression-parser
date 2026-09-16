@@ -27,7 +27,7 @@ public class Cell {
     public static final DateTimeFormatter DATETIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     public static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
-    private final DataType type;
+    private DataType type;
     private final Object value;
     private final Node expression;
     private String textValue;
