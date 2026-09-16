@@ -55,6 +55,7 @@ public class Gui {
     private final Map<String, Object> bindings = new LinkedHashMap<>();
     private final ArrayTable arrayTable = new ArrayTable();
     private final FunctionRegistry registry;
+	private final Map<String, Cell> cellMap = new LinkedHashMap<>();
     private final ArrayModel arrayModel = new ArrayModel();
     private final JTable arrayGrid = new JTable(arrayModel);
     private final JLabel typeLabel = new JLabel(" ");
@@ -90,6 +91,7 @@ public class Gui {
         arrayGrid.setFillsViewportHeight(true);
         arrayGrid.getModel().addTableModelListener(e -> {
             if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
+				cellMap.remove(cellKey(e.getFirstRow(), e.getColumn()));
                 String raw = arrayModel.getRawValue(e.getFirstRow(), e.getColumn());
                 Cell cell = Cell.parse(raw);
                 typeLabel.setText(cell.isEmpty() ? " " : "Cell (" + (e.getFirstRow() + 1) + ","
@@ -229,14 +231,16 @@ public class Gui {
             showError(ex);
         }
     }
-
+    private static String cellKey(int row, int jtableCol) {
+        return new CellRef(row, jtableCol - 1).toString();
+    }
     private void showCellMenu(MouseEvent e) {
         int row = arrayGrid.rowAtPoint(e.getPoint());
         int col = arrayGrid.columnAtPoint(e.getPoint());
         if (row < 0 || col <= 0) return;
-        String raw = arrayModel.getRawValue(row, col);
-        Cell cell = Cell.parse(raw);
-        JPopupMenu menu = new JPopupMenu();
+        Cell cell = cellMap.computeIfAbsent(cellKey(row, col),
+                k -> Cell.parse(arrayModel.getRawValue(row, col)));
+		JPopupMenu menu = new JPopupMenu();
         JMenu typeMenu = new JMenu("Convert type");
         for (expr.DataType dt : expr.DataType.values()) {
             if (dt == expr.DataType.ANY || dt == cell.getType()) continue;
@@ -281,13 +285,13 @@ public class Gui {
         dlg.setVisible(true);
         if (dlg.wasSaved()) {
             String text = dlg.getEditedText();
-            if (text != null && !text.trim().isEmpty()) {
-                arrayModel.setValueAt(text, row, col);
-                recomputeDependentsOnEdit(row, col);
-            }
-            cell.setRawExpression(dlg.getEditedRawExpression());
-            cell.setType(dlg.getEditedDataType());
-			cell.setReferenced(dlg.getEditedReferencedCells());
+            arrayModel.setValueAt(text == null ? "" : text, row, col);
+            Cell saved = Cell.parse(text == null ? "" : text);
+            saved.setRawExpression(dlg.getEditedRawExpression());
+            saved.setType(dlg.getEditedDataType());
+            saved.setReferenced(dlg.getEditedReferencedCells());
+            cellMap.put(cellKey(row, col), saved);
+            recomputeDependentsOnEdit(row, col);
         }
     }
 
@@ -310,6 +314,7 @@ public class Gui {
                 throw new IllegalArgumentException("Rows and columns must be between 1 and 100.");
             }
             arrayModel.setDimension(rows, cols);
+			cellMap.clear();
             arrayTable.setData(arrayModel.buildData());
             setStatus("Array created: " + rows + "x" + cols + ". Fill in the cells and use get(row,col).");
         } catch (Exception ex) {

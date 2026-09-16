@@ -151,18 +151,18 @@ public class CellDialog extends JDialog {
         }
     }
 
-    private boolean isCircular(String text) {
-        if (selfRow < 0 || selfCol < 0) {
+    private boolean isCircular(List<CellRef> refs) {
+        if (selfRow < 0 || selfCol < 1) {
             return false;
         }
-        String pos = "(" + (selfRow + 1) + "," + (selfCol + 1) + ")";
-        return text.contains(pos);
+        return refs.contains(new CellRef(selfRow, selfCol - 1));
     }
-
+	
+	
     private void doEvaluate() {
         String text = exprArea.getText();
         if (text == null || text.trim().isEmpty()) {
-           return;
+            return;
         }
         try {
             Expression e = Expression.parse(text, registry);
@@ -170,7 +170,9 @@ public class CellDialog extends JDialog {
             exprArea.setText(text);
             stringArea.setText(optimized == null ? "" : optimized.toText());
             xmlArea.setText(e.toOptimizedXml());
-            if (isCircular(text)) {
+            List<CellRef> refs = optimized == null
+                    ? new ArrayList<>() : optimized.collectReferenced();
+            if (isCircular(refs)) {
                 valueField.setText("[ERROR] circular dependency");
                 JOptionPane.showMessageDialog(this,
                         "The expression references this cell: saving would create a circular dependency.",
@@ -179,24 +181,22 @@ public class CellDialog extends JDialog {
             }
             Object result = e.evaluate(bindings);
             valueField.setText(result == null ? "[ERROR] null" : String.valueOf(result));
-			if (dataType.equals(DataType.ANY) && result != null){
-				dataType = DataType.getDefault(String.valueOf(result));
-				dataTypeField.setText(dataType.name());
+            if (dataType.equals(DataType.ANY) && result != null) {
+                dataType = DataType.getDefault(String.valueOf(result));
+                dataTypeField.setText(dataType.name());
             }
             if (optimized != null && optimized.getType() != null
                     && optimized.getType() != DataType.ANY) {
                 typeLabel.setText(optimized.getType().name());
-				List<CellRef> referencedCells = optimized.collectReferenced();
-				if (referencedCells!=null && !referencedCells.isEmpty())
-					refArea.setText(referencedCells.toString());
             }
+            referencedCells = refs;
+            refArea.setText(refs.isEmpty() ? "" : refs.toString());
         } catch (Exception ex) {
             stringArea.setText("");
             xmlArea.setText("Error: " + ex.getMessage());
             valueField.setText("[ERROR] " + ex.getMessage());
         }
     }
-
     private void doCancel() {
 		initDialog();
         saved = false;

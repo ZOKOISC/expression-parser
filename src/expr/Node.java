@@ -59,14 +59,13 @@ public abstract class Node {
         }
         throw new ExpressionException("Missing child element in XML node.");
     }
-	public List<CellRef> collectReferenced() {
-		if (this instanceof ConstantNode) return null;
+    public List<CellRef> collectReferenced() {
         Set<CellRef> refs = new LinkedHashSet<>();
-        collectRefs(this, 0, 0, refs);
+        collectRefs(this, refs);
         return new ArrayList<>(refs);
     }
 
-    private static void collectRefs(Node n, int selfRow, int selfCol, Set<CellRef> out) {
+    private static void collectRefs(Node n, Set<CellRef> out) {
         if (n instanceof FunctionNode f) {
             if (f.getName().equalsIgnoreCase("get") && f.getParams().size() >= 2) {
                 Node rn = f.getParams().get(0);
@@ -75,28 +74,25 @@ public abstract class Node {
                         && rc.getType() == DataType.NUMERIC && cc.getType() == DataType.NUMERIC
                         && Math.floor(rc.numericValue()) == rc.numericValue()
                         && Math.floor(cc.numericValue()) == cc.numericValue()) {
-                    int row = ((int) rc.numericValue()) - 1;
-                    int col = ((int) cc.numericValue()) - 1;
-                    if (row >= 0 && col >= 0 && !(row == selfRow && col == selfCol)) {
-                        out.add(new CellRef(row, col));
-                    }
+                    out.add(new CellRef(((int) rc.numericValue()) - 1,
+                            ((int) cc.numericValue()) - 1));
                 }
             }
             for (Node p : f.getParams()) {
-                collectRefs(p, selfRow, selfCol, out);
+                collectRefs(p, out);
             }
         } else if (n instanceof IfNode i) {
-            collectRefs(i.getCondition(), selfRow, selfCol, out);
-            collectRefs(i.getWhenTrue(), selfRow, selfCol, out);
-            collectRefs(i.getWhenFalse(), selfRow, selfCol, out);
+            collectRefs(i.getCondition(), out);
+            collectRefs(i.getWhenTrue(), out);
+            collectRefs(i.getWhenFalse(), out);
         } else if (n instanceof UnaryNode u) {
-            collectRefs(u.getChild(), selfRow, selfCol, out);
+            collectRefs(u.getChild(), out);
         } else if (n instanceof BinaryNode b) {
-            collectRefs(b.getLeft(), selfRow, selfCol, out);
-            collectRefs(b.getRight(), selfRow, selfCol, out);
+            collectRefs(b.getLeft(), out);
+            collectRefs(b.getRight(), out);
         } else if (n instanceof OperationsNode on) {
             for (Node c : on.getChildren()) {
-                collectRefs(c, selfRow, selfCol, out);
+                collectRefs(c, out);
             }
         }
     }
