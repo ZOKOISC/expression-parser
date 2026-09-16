@@ -30,8 +30,10 @@ public class Cell {
     private final DataType type;
     private final Object value;
     private final Node expression;
-    private final String rawText;
+    private String textValue;
+    private String rawExpression;
     private final List<CellRef> dependents = new ArrayList<>();
+    private final List<CellRef> referenced = new ArrayList<>();
 
     private boolean bold;
     private Color background;
@@ -41,18 +43,18 @@ public class Cell {
         this(type, value, null, null);
     }
 
-    public Cell(DataType type, Object value, Node expression, String rawText) {
+    public Cell(DataType type, Object value, Node expression, String textValue) {
         this.type = type;
         this.value = value;
         this.expression = expression;
-        this.rawText = rawText;
+        this.textValue = textValue;
     }
 
     public static Cell empty() {
         return new Cell(DataType.STRING, null);
     }
 
-    public static Cell expression(Node node, String rawText) {
+    public static Cell expression(Node node, String rawExpression) {
         if (node == null) {
             return empty();
         }
@@ -63,7 +65,7 @@ public class Cell {
             v = null;
         }
         DataType vt = v == null ? DataType.ANY : EvalUtil.valueType(v);
-        return new Cell(vt, v, node, rawText);
+        return new Cell(vt, v, node, rawExpression);
     }
 
     public DataType getType() {
@@ -82,9 +84,17 @@ public class Cell {
         return expression != null;
     }
 
-    public String getRawText() {
-        return rawText == null ? "" : rawText;
+    public String getTextValue() {
+        return textValue == null ? "" : textValue;
     }
+    public String getRawExpression() {
+        return rawExpression == null ? "" : rawExpression;
+    }
+	
+	public void setRawExpression(String rawExpression) {
+        this.rawExpression = rawExpression;
+    }
+
 
     public boolean isEmpty() {
         return value == null;

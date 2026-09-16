@@ -159,9 +159,9 @@ public class Gui {
         form.add(arrayScroll, c);
 
         c.gridy = 7;
-        form.add(new JLabel("<html>get(row, col) uses 1-based indices. Cell formats: 13, 'text', true,"
-                + " 2024-01-15 (date), 2024-01-15 10:30:00 (datetime), 23:59:59 (time)."
-                + "<br>Empty cell / out-of-range index -&gt; warning, result null.</html>"), c);
+//        form.add(new JLabel("<html>get(row, col) uses 1-based indices. Cell formats: 13, 'text', true,"
+//                + " 2024-01-15 (date), 2024-01-15 10:30:00 (datetime), 23:59:59 (time)."
+ //               + "<br>Empty cell / out-of-range index -&gt; warning, result null.</html>"), c);
 
         JTabbedPane tabs = new JTabbedPane();
         tabs.addTab("Array Grid", arrayScroll);
@@ -244,7 +244,7 @@ public class Gui {
                     Cell converted = cell.convertTo(dt);
                     String storedText = converted.getType() == expr.DataType.STRING
                             ? "\"" + converted.display() + "\""
-                            : converted.getRawText();
+                            : converted.getTextValue();
                     arrayModel.setValueAt(storedText, row, col);
                     recomputeDependentsOnEdit(row, col);
                 } catch (Exception ex) {
@@ -275,6 +275,7 @@ public class Gui {
     private void showEditDialog(int row, int col, Cell cell) {
         CellDialog dlg = new CellDialog((Frame) SwingUtilities.getWindowAncestor(arrayGrid),
                 cell, registry, bindings);
+		dlg.setPosition(row,col);
         dlg.setVisible(true);
         if (dlg.wasSaved()) {
             String text = dlg.getEditedText();
