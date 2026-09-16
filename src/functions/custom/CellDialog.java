@@ -153,10 +153,11 @@ public class CellDialog extends JDialog {
         if (saved != null) {
             stringArea.setText(saved.toText());
             xmlArea.setText(nodeXml(saved));
+            List<CellRef> refs = saved.collectReferenced();
+            refArea.setText(refs.isEmpty() ? "" : refs.toString());
         } else {
             refreshTabs();
-        }
-	}
+        }	}
     private void refreshTabs() {
         String text = exprArea.getText();
         if (text == null || text.trim().isEmpty()) {
