@@ -32,6 +32,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.event.TableModelEvent;
 import javax.swing.table.AbstractTableModel;
 
+import expr.CellRef;
 import expr.EvalUtil;
 import expr.Expression;
 import expr.DataType;
@@ -280,14 +281,13 @@ public class Gui {
         dlg.setVisible(true);
         if (dlg.wasSaved()) {
             String text = dlg.getEditedText();
-			String rawExpression = dlg.getEditedRawExpression();
             if (text != null && !text.trim().isEmpty()) {
                 arrayModel.setValueAt(text, row, col);
                 recomputeDependentsOnEdit(row, col);
             }
-            cell.setRawExpression(rawExpression);
+            cell.setRawExpression(dlg.getEditedRawExpression());
             cell.setType(dlg.getEditedDataType());
-			cell.setReferenced(dlg.getEditedReferencedCells())
+			cell.setReferenced(dlg.getEditedReferencedCells());
         }
     }
 

@@ -5,6 +5,10 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Frame;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -17,6 +21,7 @@ import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 
+import expr.CellRef;
 import expr.DataType;
 import expr.Expression;
 import expr.Node;
@@ -37,9 +42,10 @@ public class CellDialog extends JDialog {
     private final JTextField dataTypeField = new JTextField(8);
     private final JLabel posLabel = new JLabel(" ");
     private final JLabel typeLabel = new JLabel(" ");
-    private final JTextArea exprArea = new JTextArea(6, 55);
+    private final JTextArea exprArea = new JTextArea(12, 55);
     private final JTextArea stringArea = new JTextArea(12, 55);
     private final JTextArea xmlArea = new JTextArea(12, 55);
+    private final JTextArea refArea = new JTextArea(12, 55);
     private final Cell cell;
     private final FunctionRegistry registry;
     private final Map<String, Object> bindings;
@@ -82,7 +88,7 @@ public class CellDialog extends JDialog {
         tabs.addTab("Optimized XML", new JScrollPane(xmlArea));
         tabs.addChangeListener(e -> refreshTabs());
         tabs.addTab("Optimized string", new JScrollPane(stringArea));
-        xmlArea.setEditable(false);
+        tabs.addTab("Refs", new JScrollPane(refArea));
 
         // Point 2: datatype placed right after the value, on the same line.
         JPanel valueRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
@@ -176,11 +182,13 @@ public class CellDialog extends JDialog {
 			if (dataType.equals(DataType.ANY) && result != null){
 				dataType = DataType.getDefault(String.valueOf(result));
 				dataTypeField.setText(dataType.name());
-				referencedCells = collectReferenced(optimized, selfRow, selfCol);
             }
             if (optimized != null && optimized.getType() != null
                     && optimized.getType() != DataType.ANY) {
                 typeLabel.setText(optimized.getType().name());
+				List<CellRef> referencedCells = optimized.collectReferenced();
+				if (referencedCells!=null && !referencedCells.isEmpty())
+					refArea.setText(referencedCells.toString());
             }
         } catch (Exception ex) {
             stringArea.setText("");
