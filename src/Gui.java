@@ -283,6 +283,7 @@ public class Gui {
                 arrayModel.setValueAt(text, row, col);
                 recomputeDependentsOnEdit(row, col);
             }
+            cell.setRawExpression(dlg.getEditedRawExpression());
        }
     }
 

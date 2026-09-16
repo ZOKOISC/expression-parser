@@ -40,14 +40,15 @@ public class Cell {
     private Color foreground;
 
     public Cell(DataType type, Object value) {
-        this(type, value, null, null);
+        this(type, value, null, null, null);
     }
 
-    public Cell(DataType type, Object value, Node expression, String textValue) {
+    public Cell(DataType type, Object value, Node expression, String textValue, String rawExpression) {
         this.type = type;
         this.value = value;
         this.expression = expression;
         this.textValue = textValue;
+		this.rawExpression = rawExpression;
     }
 
     public static Cell empty() {
@@ -65,7 +66,7 @@ public class Cell {
             v = null;
         }
         DataType vt = v == null ? DataType.ANY : EvalUtil.valueType(v);
-        return new Cell(vt, v, node, rawExpression);
+        return new Cell(vt, v, node, v.toString(), rawExpression);
     }
 
     public DataType getType() {

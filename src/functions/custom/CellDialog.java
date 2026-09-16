@@ -203,6 +203,9 @@ public class CellDialog extends JDialog {
     public String getEditedText() {
         return valueField.getText();
     }
+    public String getEditedRawExpression() {
+        return exprArea.getText();
+    }
 
     public void setPosition(int row, int col) {
         selfRow = row;
