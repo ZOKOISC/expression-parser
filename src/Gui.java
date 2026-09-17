@@ -31,7 +31,6 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.event.TableModelEvent;
-import javax.swing.table.AbstractTableModel;
 
 import expr.CellRef;
 import expr.EvalUtil;
@@ -44,6 +43,7 @@ import functions.custom.ArrayGetFunction;
 import functions.custom.ArrayTable;
 import functions.custom.Cell;
 import functions.custom.CellDialog;
+import functions.custom.ArrayModel
 
 public class Gui {
 
@@ -315,7 +315,7 @@ public class Gui {
                     } else if (referenced.getExpression() == null) {
                         referenced.setExpression(referenced.constantNode());
                     }
-                    referenced.addDependent(selfRef);
+                    referenced.addDependency(selfRef, cellMap);
                 }
             }
             cellMap.put(cellKey(row, col), saved);
@@ -330,18 +330,10 @@ public class Gui {
             doEvaluate();
             Cell edited = cellMap.get(cellKey(row, col));
             if (edited != null) {
-                edited.recalculate(cellMap, parseBindings(varsArea.getText()), registry);
-                arrayModel.setRawValue(row, col, edited.display());
-                for (CellRef dep : edited.getDependents()) {
-                    Cell dc = cellMap.get(dep.toString());
-                    if (dc != null) {
-                        arrayModel.setRawValue(dep.getRow(), dep.getCol() + 1, dc.display());
-                    }
-                }
-                arrayTable.setData(arrayModel.buildData());
+                edited.recalculate(new CellRef(row, col - 1), cellMap, parseBindings(varsArea.getText()),
+                        registry, arrayModel, arrayTable);
                 arrayGrid.repaint();
-            }
-            setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed.");
+            }            setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed.");
         } catch (Exception ex) {
             showError(ex);
         }
@@ -423,73 +415,5 @@ public class Gui {
         if (o instanceof java.time.LocalTime) return "TIME";
         if (o instanceof expr.Delay) return "DELAY";
         return o == null ? "NULL" : o.getClass().getSimpleName();
-    }
-
-    private static final class ArrayModel extends AbstractTableModel {
-
-        private String[][] cells = new String[0][0];
-
-        void setDimension(int rows, int cols) {
-            cells = new String[rows][cols];
-            fireTableStructureChanged();
-        }
-
-        @Override
-        public int getRowCount() {
-            return cells.length;
-        }
-
-        @Override
-        public int getColumnCount() {
-            return cells.length == 0 ? 0 : cells[0].length + 1;
-        }
-
-        @Override
-        public String getColumnName(int col) {
-            return col == 0 ? "#" : String.valueOf(col);
-        }
-
-        @Override
-        public boolean isCellEditable(int row, int col) {
-            return col > 0;
-        }
-
-        @Override
-        public Object getValueAt(int row, int col) {
-            if (col == 0) return row + 1;
-            String s = cells[row][col - 1];
-            return s == null ? "" : s;
-        }
-
-        @Override
-        public void setValueAt(Object value, int row, int col) {
-            if (col > 0) {
-                cells[row][col - 1] = String.valueOf(value).trim();
-                fireTableCellUpdated(row, col);
-            }
-        }
-
-        String getRawValue(int row, int col) {
-            if (col == 0 || row < 0 || row >= cells.length) return "";
-            String s = cells[row][col - 1];
-            return s == null ? "" : s;
-        }
-		
-        void setRawValue(int row, int col, String value) {
-            if (col > 0 && row >= 0 && row < cells.length) {
-                cells[row][col - 1] = String.valueOf(value).trim();
-            }
-        }
-
-        Cell[][] buildData() {
-            Cell[][] data = new Cell[cells.length][];
-            for (int r = 0; r < cells.length; r++) {
-                data[r] = new Cell[cells[r].length];
-                for (int c = 0; c < cells[r].length; c++) {
-                    data[r][c] = Cell.parse(cells[r][c]);
-                }
-            }
-            return data;
-        }
     }
 }

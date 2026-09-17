@@ -37,7 +37,7 @@ public class Cell {
     private Node expression;
     private String textValue;
     private String rawExpression;
-    private List<CellRef> dependents = new ArrayList<>();
+	private final Dependents dependents = new Dependents();
     private Set<CellRef> referenced;
 
     private boolean bold;
@@ -132,15 +132,17 @@ public class Cell {
         return referenced;
     }
 	public void setDependents(List<CellRef> refs) {
-        dependents.clear();
+        dependents.getList().clear();
         if (refs != null) {
-            dependents.addAll(refs);
+            dependents.getList().addAll(refs);
         }
     }
     public List<CellRef> getDependents() {
-        return dependents;
+        return dependents.getList();
     }
-
+    public void addDependency(CellRef ref, Map<String, Cell> cellMap) {
+        dependents.addDependency(ref, cellMap);
+    }
     public Object getValue() {
         return value;
     }
@@ -191,18 +193,6 @@ public class Cell {
 
     public void setForeground(Color foreground) {
         this.foreground = foreground;
-    }
-
-    public void addDependent(CellRef ref) {
-        if (ref == null) {
-            return;
-        }
-        for (CellRef existing : dependents) {
-            if (existing.equals(ref)) {
-                return;
-            }
-        }
-        dependents.add(ref);
     }
 
     public String display() {
@@ -369,7 +359,8 @@ public class Cell {
     }
     private boolean recalculating;
 
-    public void recalculate(Map<String, Cell> cellMap, Map<String, Object> bindings, FunctionRegistry registry) {
+    public void recalculate(CellRef self, Map<String, Cell> cellMap, Map<String, Object> bindings,
+                            FunctionRegistry registry, ArrayModel model, ArrayTable table) {
         if (expression == null || recalculating) {
             return;
         }
@@ -384,12 +375,15 @@ public class Cell {
             value = v;
             type = v == null ? DataType.ANY : EvalUtil.valueType(v);
             textValue = v == null ? "" : EvalUtil.asString(v);
-            if (dependents != null) {
-                for (CellRef d : dependents) {
-                    Cell dc = cellMap.get(d.toString());
-                    if (dc != null) {
-                        dc.recalculate(cellMap, bindings, registry);
-                    }
+            if (self != null) {
+                model.setRawValue(self.getRow(), self.getCol() + 1, display());
+                table.setData(model.buildData());
+            }
+            dependents.reorder(cellMap);
+            for (CellRef d : dependents.getList()) {
+                Cell dc = cellMap.get(d.toString());
+                if (dc != null) {
+                    dc.recalculate(d, cellMap, bindings, registry, model, table);
                 }
             }
         } finally {
