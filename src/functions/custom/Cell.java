@@ -359,8 +359,7 @@ public class Cell {
     }
     private boolean recalculating;
 
-    public void recalculate(CellRef self, Map<String, Cell> cellMap, Map<String, Object> bindings,
-                            FunctionRegistry registry, ArrayModel model, ArrayTable table) {
+    public void recalculate(CellRef self, Map<String, Cell> cellMap, Map<String, Object> bindings, FunctionRegistry registry) {
         if (expression == null || recalculating) {
             return;
         }
@@ -375,10 +374,6 @@ public class Cell {
             value = v;
             type = v == null ? DataType.ANY : EvalUtil.valueType(v);
             textValue = v == null ? "" : EvalUtil.asString(v);
-            if (self != null) {
-                model.setRawValue(self.getRow(), self.getCol() + 1, display());
-                table.setData(model.buildData());
-            }
             dependents.reorder(cellMap);
             for (CellRef d : dependents.getList()) {
                 Cell dc = cellMap.get(d.toString());

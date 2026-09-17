@@ -6,7 +6,7 @@ public class ArrayModel extends AbstractTableModel {
 
     private String[][] cells = new String[0][0];
 
-    void setDimension(int rows, int cols) {
+    public void setDimension(int rows, int cols) {
         cells = new String[rows][cols];
         fireTableStructureChanged();
     }
@@ -46,19 +46,19 @@ public class ArrayModel extends AbstractTableModel {
         }
     }
 
-    String getRawValue(int row, int col) {
+    public String getRawValue(int row, int col) {
         if (col == 0 || row < 0 || row >= cells.length) return "";
         String s = cells[row][col - 1];
         return s == null ? "" : s;
     }
 
-    void setRawValue(int row, int col, String value) {
+    public void setRawValue(int row, int col, String value) {
         if (col > 0 && row >= 0 && row < cells.length) {
             cells[row][col - 1] = String.valueOf(value).trim();
         }
     }
 
-    Cell[][] buildData() {
+    public Cell[][] buildData() {
         Cell[][] data = new Cell[cells.length][];
         for (int r = 0; r < cells.length; r++) {
             data[r] = new Cell[cells[r].length];

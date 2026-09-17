@@ -43,7 +43,7 @@ import functions.custom.ArrayGetFunction;
 import functions.custom.ArrayTable;
 import functions.custom.Cell;
 import functions.custom.CellDialog;
-import functions.custom.ArrayModel
+import functions.custom.ArrayModel;
 
 public class Gui {
 
@@ -70,7 +70,28 @@ public class Gui {
 
         registry = MathFunctions.createRegistry();
         registry.register(new ArrayGetFunction(arrayTable));
+        registry.register(new ArrayGetFunction(new CellProvider() {
+            @Override
+            public Cell at(int row, int col) {
+                CellRef ref = new CellRef(row - 1, col - 1);
+                Cell m = cellMap.get(ref.toString());
+                if (m != null) {
+                    return m;
+                }
+                String raw = arrayModel.getRawValue(row - 1, col);
+                return Cell.parse(raw).isEmpty() ? null : Cell.parse(raw);
+            }
 
+            @Override
+            public int rows() {
+                return arrayModel.getRowCount();
+            }
+
+            @Override
+            public int cols() {
+                return arrayModel.getColumnCount() - 1;
+            }
+        }));
         exprField.setFont(mono);
         exprField.setText("addDays(get(2,1), 30)");
 
