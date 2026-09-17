@@ -40,6 +40,7 @@ import expr.CellRef;
 import expr.DataType;
 import expr.Expression;
 import expr.Node;
+import expr.ConstantNode;
 import functions.FunctionRegistry;
 
 /**
@@ -55,7 +56,7 @@ public class CellDialog extends JDialog {
 
     private final JTextField valueField = new JTextField(42);
     private final JTextField dataTypeField = new JTextField(8);
-    private final JTextField nodeTypeField = new JTextField(8);
+    private final JTextField nodeTypeField = new JTextField(10);
     private final JLabel posLabel = new JLabel(" ");
     private final JLabel typeLabel = new JLabel(" ");
     private final JTextArea exprArea = new JTextArea(12, 55);
@@ -181,7 +182,12 @@ public class CellDialog extends JDialog {
         try {
             Expression e = Expression.parse(text, registry);
             Node optimized = e.getOptimized();
-            stringArea.setText(optimized == null ? "" : optimized.toText());
+            if (optimized instanceof ConstantNode cn) {
+                stringArea.setText(cn.toText());
+                xmlArea.setText(nodeXml(cn));
+                refArea.setText("");
+                return;
+            }            stringArea.setText(optimized == null ? "" : optimized.toText());
             xmlArea.setText(e.toOptimizedXml());
             Set<CellRef>  refs = optimized == null
                     ?  new LinkedHashSet<>() : optimized.collectReferenced();
@@ -207,7 +213,16 @@ public class CellDialog extends JDialog {
         try {
             Expression e = Expression.parse(text, registry);
             Node optimized = e.getOptimized();
-			lastNode = optimized;
+            if (optimized instanceof ConstantNode cn) {
+                exprArea.setText(text);
+                stringArea.setText(cn.toText());
+                xmlArea.setText(nodeXml(cn));
+                Object cv = cn.getValue();
+                valueField.setText(cv == null ? "" : String.valueOf(cv));
+                refArea.setText("");
+                referencedCells = null;
+                return;
+            }			lastNode = optimized;
             exprArea.setText(text);
             stringArea.setText(optimized == null ? "" : optimized.toText());
             xmlArea.setText(e.toOptimizedXml());
@@ -254,6 +269,7 @@ public class CellDialog extends JDialog {
         } else {
             lastNode = null;
         }
+		referencedCells = lastNode == null ? null : lastNode.collectReferenced();
         saved = true;
         dispose();
     }

@@ -291,20 +291,22 @@ public class Gui {
             saved.setRawExpression(dlg.getEditedRawExpression());
             saved.setType(dlg.getEditedDataType());
 			saved.setExpression(dlg.getEditedNode());
-			//Cell oldCell = cellMap.get(cellKey(row, col));
-			//Set<CellRef> oldRefs = oldCell.getReferenced();
-            saved.setReferenced(dlg.getEditedReferencedCells());
-			//List<ellRef> dependents = oldCell.getDependents();
-			Set<CellRef> refs = saved.getReferenced();
-			if (refs != null)
-				for (CellRef ref : refs) {
-					String key = ref.toString();
-					if (!cellMap.containsKey(key)) {
-						cellMap.put(key,
-								new Cell(ref, arrayModel.getRawValue(ref.getRow(), ref.getCol() + 1)));
-					}
-				}
-            cellMap.put(cellKey(row, col), saved);
+            Set<CellRef> refs = saved.getReferenced();
+            CellRef selfRef = new CellRef(row, col - 1);
+            if (refs != null) {
+                for (CellRef ref : refs) {
+                    String key = ref.toString();
+                    Cell referenced = cellMap.get(key);
+                    if (referenced == null) {
+                        referenced = new Cell(ref,
+                                arrayModel.getRawValue(ref.getRow(), ref.getCol() + 1));
+                        cellMap.put(key, referenced);
+                    } else if (referenced.getExpression() == null) {
+                        referenced.setExpression(referenced.constantNode());
+                    }
+                    referenced.addDependent(selfRef);                }
+            }
+            cellMap.put(cellKey(row, col), saved);            cellMap.put(cellKey(row, col), saved);
             recomputeDependentsOnEdit(row, col);
         }
     }

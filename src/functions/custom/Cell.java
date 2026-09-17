@@ -89,6 +89,13 @@ public class Cell {
         this.expression = expression;
     }
 	
+    public ConstantNode constantNode() {
+        Object v = value;
+        Object cv = (v instanceof Number || v instanceof Boolean || v instanceof String)
+                ? v : display();
+        return new ConstantNode(cv);
+    }
+	
     public DataType getType() {
         return type;
     }
