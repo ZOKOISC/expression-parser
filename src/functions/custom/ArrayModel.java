@@ -4,21 +4,20 @@ import javax.swing.table.AbstractTableModel;
 
 public class ArrayModel extends AbstractTableModel {
 
-    private String[][] cells = new String[0][0];
+    private final Sheet sheet;
 
-    public void setDimension(int rows, int cols) {
-        cells = new String[rows][cols];
-        fireTableStructureChanged();
+    public ArrayModel(Sheet sheet) {
+        this.sheet = sheet;
     }
 
     @Override
     public int getRowCount() {
-        return cells.length;
+        return sheet.rows();
     }
 
     @Override
     public int getColumnCount() {
-        return cells.length == 0 ? 0 : cells[0].length + 1;
+        return sheet.rows() == 0 ? 0 : sheet.cols() + 1;
     }
 
     @Override
@@ -34,38 +33,14 @@ public class ArrayModel extends AbstractTableModel {
     @Override
     public Object getValueAt(int row, int col) {
         if (col == 0) return row + 1;
-        String s = cells[row][col - 1];
-        return s == null ? "" : s;
+        return sheet.getRawValue(row, col);
     }
 
     @Override
     public void setValueAt(Object value, int row, int col) {
         if (col > 0) {
-            cells[row][col - 1] = String.valueOf(value).trim();
+            sheet.setRawValue(row, col, String.valueOf(value).trim());
             fireTableCellUpdated(row, col);
         }
-    }
-
-    public String getRawValue(int row, int col) {
-        if (col == 0 || row < 0 || row >= cells.length) return "";
-        String s = cells[row][col - 1];
-        return s == null ? "" : s;
-    }
-
-    public void setRawValue(int row, int col, String value) {
-        if (col > 0 && row >= 0 && row < cells.length) {
-            cells[row][col - 1] = String.valueOf(value).trim();
-        }
-    }
-
-    public Cell[][] buildData() {
-        Cell[][] data = new Cell[cells.length][];
-        for (int r = 0; r < cells.length; r++) {
-            data[r] = new Cell[cells[r].length];
-            for (int c = 0; c < cells[r].length; c++) {
-                data[r][c] = Cell.parse(cells[r][c]);
-            }
-        }
-        return data;
     }
 }

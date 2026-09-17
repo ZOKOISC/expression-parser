@@ -48,20 +48,12 @@ import functions.custom.CellProvider;
 
 public class Gui {
 
-    private final JTextField exprField = new JTextField();
-    private final JTextArea varsArea = new JTextArea(5, 40);
-    private final JTextArea output = new JTextArea();
-    private final JLabel status = new JLabel(" ");
-    private final JTextField rowsField = new JTextField("3", 3);
-    private final JTextField colsField = new JTextField("3", 3);
     private final Map<String, Object> bindings = new LinkedHashMap<>();
-    private final ArrayTable arrayTable = new ArrayTable();
     private final FunctionRegistry registry;
-	private final Map<String, Cell> cellMap = new LinkedHashMap<>();
-    private final ArrayModel arrayModel = new ArrayModel();
-    private final JTable arrayGrid = new JTable(arrayModel);
+    private final Sheet sheet = new Sheet();
+    private final JTable arrayGrid = new JTable(new ArrayModel(sheet));
     private final JLabel typeLabel = new JLabel(" ");
-
+	
     public static void main(String[] args) {
         SwingUtilities.invokeLater(Gui::new);
     }
@@ -70,29 +62,7 @@ public class Gui {
         Font mono = new Font(Font.MONOSPACED, Font.PLAIN, 13);
 
         registry = MathFunctions.createRegistry();
-        registry.register(new ArrayGetFunction(new CellProvider() {
-            @Override
-            public Cell at(int row, int col) {
-                CellRef ref = new CellRef(row - 1, col - 1);
-                Cell m = cellMap.get(ref.toString());
-                if (m != null) {
-                    return m;
-                }
-                String raw = arrayModel.getRawValue(row - 1, col);
-                return Cell.parse(raw).isEmpty() ? null : Cell.parse(raw);
-            }
-
-            @Override
-            public int rows() {
-                return arrayModel.getRowCount();
-            }
-
-            @Override
-            public int cols() {
-                return arrayModel.getColumnCount() - 1;
-            }
-        }));
-        exprField.setFont(mono);
+		registry.register(new ArrayGetFunction(sheet));        exprField.setFont(mono);
         exprField.setText("addDays(get(2,1), 30)");
 
         varsArea.setFont(mono);
@@ -102,26 +72,25 @@ public class Gui {
         output.setEditable(false);
         output.setLineWrap(false);
 
-        arrayModel.setDimension(3, 3);
-        arrayModel.setValueAt("13", 0, 1);
-        arrayModel.setValueAt("'hello'", 0, 2);
-        arrayModel.setValueAt("true", 0, 3);
-        arrayModel.setValueAt("2024-01-15", 1, 1);
-        arrayModel.setValueAt("2023-12-25 23:59:59", 1, 2);
-        arrayModel.setValueAt("23:59:59", 1, 3);
-        arrayTable.setData(arrayModel.buildData());
+        sheet.setSize(3, 3);
+        sheet.setRawValue(0, 1, "13");
+        sheet.setRawValue(0, 2, "'hello'");
+        sheet.setRawValue(0, 3, "true");
+        sheet.setRawValue(1, 1, "2024-01-15");
+        sheet.setRawValue(1, 2, "2023-12-25 23:59:59");
+        sheet.setRawValue(1, 3, "23:59:59");
 		resizeRowNumberColumn(3);
         arrayGrid.setFillsViewportHeight(true);
         arrayGrid.getModel().addTableModelListener(e -> {
             if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
                 String key = cellKey(e.getFirstRow(), e.getColumn());
-                Cell existing = cellMap.get(key);
-                String raw = arrayModel.getRawValue(e.getFirstRow(), e.getColumn());
+                Cell existing = sheet.registeredCell(e.getFirstRow(), e.getColumn());
+                String raw = sheet.getRawValue(e.getFirstRow(), e.getColumn());
                 if (existing != null) {
                     existing.updateValue(raw);
                 }
-                Cell cell = existing == null ? Cell.parse(raw) : existing;
-                typeLabel.setText(cell.isEmpty() ? " " : "Cell (" + (e.getFirstRow() + 1) + ","
+                Cell cell = existing == null ? Cell.parse(raw) : existing; 
+				typeLabel.setText(cell.isEmpty() ? " " : "Cell (" + (e.getFirstRow() + 1) + ","
                         + e.getColumn() + ") type: " + cell.getType().name());
                 recomputeDependentsOnEdit(e.getFirstRow(), e.getColumn());
             }
@@ -239,7 +208,6 @@ public class Gui {
 
     private void doEvaluate() {
         try {
-            arrayTable.setData(arrayModel.buildData());
             Warnings.clear();
             Expression expr = Expression.parse(exprField.getText(), registry);
             Object result = expr.evaluate(parseBindings(varsArea.getText()));
@@ -258,16 +226,12 @@ public class Gui {
             showError(ex);
         }
     }
-    private static String cellKey(int row, int jtableCol) {
-        return new CellRef(row, jtableCol - 1).toString();
-    }
     private void showCellMenu(MouseEvent e) {
         int row = arrayGrid.rowAtPoint(e.getPoint());
         int col = arrayGrid.columnAtPoint(e.getPoint());
         if (row < 0 || col <= 0) return;
-        Cell cell = cellMap.computeIfAbsent(cellKey(row, col),
-                k -> Cell.parse(arrayModel.getRawValue(row, col)));
-		System.out.println("MENU key=" + cellKey(row, col) + " node=" + (cell.getExpression() == null ? "null" : cell.getExpression().getClass().getSimpleName()) + " deps=" + cell.getDependents());
+        Cell cell = sheet.cell(row, col);
+		System.out.println("MENU key=" + Sheet.cellKey(row, col) + " node=" + (cell.getExpression() == null ? "null" : cell.getExpression().getClass().getSimpleName()) + " deps=" + cell.getDependents());
 		JPopupMenu menu = new JPopupMenu();
         JMenu typeMenu = new JMenu("Convert type");
         for (expr.DataType dt : expr.DataType.values()) {
@@ -275,11 +239,8 @@ public class Gui {
             JMenuItem item = new JMenuItem(dt.name());
             item.addActionListener(ev -> {
                 try {
-                    Cell converted = cell.convertTo(dt);
-                    String storedText = converted.getType() == expr.DataType.STRING
-                            ? "\"" + converted.display() + "\""
-                            : converted.getTextValue();
-                    arrayModel.setValueAt(storedText, row, col);
+                    sheet.setRawValue(row, col, storedText);
+                    cell.updateValue(storedText);
                     recomputeDependentsOnEdit(row, col);
                 } catch (Exception ex) {
                     showError(ex);
@@ -294,9 +255,10 @@ public class Gui {
         JMenuItem clear = new JMenuItem("Clear cell");
         clear.addActionListener(ev -> {
             try {
-                arrayModel.setValueAt("", row, col);
+                sheet.setRawValue(row, col, "");
+                cell.updateValue("");
                 recomputeDependentsOnEdit(row, col);
-            } catch (Exception ex) {
+			} catch (Exception ex) {
                 showError(ex);
             }
         });
@@ -312,63 +274,17 @@ public class Gui {
 		dlg.setPosition(row,col);
         dlg.setVisible(true);
         if (dlg.wasSaved()) {
-            String text = dlg.getEditedText();
-            arrayModel.setValueAt(text == null ? "" : text, row, col);
-            Cell saved = Cell.parse(text == null ? "" : text);
-            saved.setRawExpression(dlg.getEditedRawExpression());
-            saved.setType(dlg.getEditedDataType());
-            saved.setExpression(dlg.getEditedNode());
-            saved.setReferenced(dlg.getEditedReferencedCells());
-            Cell prev = cellMap.get(cellKey(row, col));
-            if (prev != null) {
-                saved.setDependents(prev.getDependents());
-            }
-            Set<CellRef> refs = saved.getReferenced();
-            CellRef selfRef = new CellRef(row, col - 1);
-            if (refs != null) {
-                for (CellRef ref : refs) {
-                    String key = ref.toString();
-                    Cell referenced = cellMap.get(key);
-                    if (referenced == null) {
-                        referenced = new Cell(ref,
-                                arrayModel.getRawValue(ref.getRow(), ref.getCol() + 1));
-                        cellMap.put(key, referenced);
-                    } else if (referenced.getExpression() == null) {
-                        referenced.setExpression(referenced.constantNode());
-                    }
-                    referenced.addDependency(selfRef, cellMap);
-                }
-            }
-            cellMap.put(cellKey(row, col), saved);
+             sheet.saveCell(row, col, dlg.getEditedText(), dlg.getEditedRawExpression(),
+                    dlg.getEditedNode(), dlg.getEditedDataType(), dlg.getEditedReferencedCells());
             recomputeDependentsOnEdit(row, col);
         }
 	}
 
     private void recomputeDependentsOnEdit(int row, int col) {
         try {
-            Warnings.clear();
             doEvaluate();
-            Cell edited = cellMap.get(cellKey(row, col));
-            if (edited != null) {
-                edited.recalculate(new CellRef(row, col - 1), cellMap, parseBindings(varsArea.getText()), registry);
-                Set<String> done = new java.util.LinkedHashSet<>();
-                java.util.ArrayDeque<CellRef> todo = new java.util.ArrayDeque<>();
-                todo.push(new CellRef(row, col - 1));
-                while (!todo.isEmpty()) {
-                    CellRef r = todo.pop();
-                    if (!done.add(r.toString())) {
-                        continue;
-                    }
-                    Cell c = cellMap.get(r.toString());
-                    if (c != null) {
-                        arrayModel.setRawValue(r.getRow(), r.getCol() + 1, c.display());
-                        for (CellRef d : c.getDependents()) {
-                            todo.push(d);
-                        }
-                    }
-                }
-                arrayGrid.repaint();
-            }
+            sheet.recomputeDependentsOnEdit(row, col, parseBindings(varsArea.getText()), registry);
+            arrayGrid.repaint();
             setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed.");
         } catch (Exception ex) {
             showError(ex);
@@ -389,10 +305,8 @@ public class Gui {
             if (rows < 1 || cols < 1 || rows > 100 || cols > 100) {
                 throw new IllegalArgumentException("Rows and columns must be between 1 and 100.");
             }
-            arrayModel.setDimension(rows, cols);
+            sheet.setSize(rows, cols);
 			resizeRowNumberColumn(rows);
-			cellMap.clear();
-            arrayTable.setData(arrayModel.buildData());
             setStatus("Array created: " + rows + "x" + cols + ". Fill in the cells and use get(row,col).");
         } catch (Exception ex) {
             showError(ex);
