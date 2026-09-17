@@ -44,6 +44,7 @@ import functions.custom.ArrayTable;
 import functions.custom.Cell;
 import functions.custom.CellDialog;
 import functions.custom.ArrayModel;
+import functions.custom.CellProvider;
 
 public class Gui {
 
@@ -69,7 +70,6 @@ public class Gui {
         Font mono = new Font(Font.MONOSPACED, Font.PLAIN, 13);
 
         registry = MathFunctions.createRegistry();
-        registry.register(new ArrayGetFunction(arrayTable));
         registry.register(new ArrayGetFunction(new CellProvider() {
             @Override
             public Cell at(int row, int col) {
@@ -346,19 +346,35 @@ public class Gui {
 
     private void recomputeDependentsOnEdit(int row, int col) {
         try {
-            arrayTable.setData(arrayModel.buildData());
             Warnings.clear();
             doEvaluate();
             Cell edited = cellMap.get(cellKey(row, col));
             if (edited != null) {
-                edited.recalculate(new CellRef(row, col - 1), cellMap, parseBindings(varsArea.getText()),
-                        registry, arrayModel, arrayTable);
+                edited.recalculate(new CellRef(row, col - 1), cellMap, parseBindings(varsArea.getText()), registry);
+                Set<String> done = new java.util.LinkedHashSet<>();
+                java.util.ArrayDeque<CellRef> todo = new java.util.ArrayDeque<>();
+                todo.push(new CellRef(row, col - 1));
+                while (!todo.isEmpty()) {
+                    CellRef r = todo.pop();
+                    if (!done.add(r.toString())) {
+                        continue;
+                    }
+                    Cell c = cellMap.get(r.toString());
+                    if (c != null) {
+                        arrayModel.setRawValue(r.getRow(), r.getCol() + 1, c.display());
+                        for (CellRef d : c.getDependents()) {
+                            todo.push(d);
+                        }
+                    }
+                }
                 arrayGrid.repaint();
-            }            setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed.");
+            }
+            setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed.");
         } catch (Exception ex) {
             showError(ex);
         }
-    }	
+    }
+
 	private void resizeRowNumberColumn(int rows) {
         int digits = String.valueOf(rows).length();
         int w = digits * 8 + 12;

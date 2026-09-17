@@ -378,7 +378,7 @@ public class Cell {
             for (CellRef d : dependents.getList()) {
                 Cell dc = cellMap.get(d.toString());
                 if (dc != null) {
-                    dc.recalculate(d, cellMap, bindings, registry, model, table);
+                    dc.recalculate(d, cellMap, bindings, registry);
                 }
             }
         } finally {
