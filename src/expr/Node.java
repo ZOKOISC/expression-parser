@@ -59,10 +59,10 @@ public abstract class Node {
         }
         throw new ExpressionException("Missing child element in XML node.");
     }
-    public List<CellRef> collectReferenced() {
+    public Set<CellRef> collectReferenced() {
         Set<CellRef> refs = new LinkedHashSet<>();
         collectRefs(this, refs);
-        return new ArrayList<>(refs);
+        return refs;
     }
 
     private static void collectRefs(Node n, Set<CellRef> out) {

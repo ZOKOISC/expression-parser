@@ -12,6 +12,7 @@ import java.awt.event.MouseEvent;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -290,7 +291,19 @@ public class Gui {
             saved.setRawExpression(dlg.getEditedRawExpression());
             saved.setType(dlg.getEditedDataType());
 			saved.setExpression(dlg.getEditedNode());
+			//Cell oldCell = cellMap.get(cellKey(row, col));
+			//Set<CellRef> oldRefs = oldCell.getReferenced();
             saved.setReferenced(dlg.getEditedReferencedCells());
+			//List<ellRef> dependents = oldCell.getDependents();
+			Set<CellRef> refs = saved.getReferenced();
+			if (refs != null)
+				for (CellRef ref : refs) {
+					String key = ref.toString();
+					if (!cellMap.containsKey(key)) {
+						cellMap.put(key,
+								new Cell(ref, arrayModel.getRawValue(ref.getRow(), ref.getCol() + 1)));
+					}
+				}
             cellMap.put(cellKey(row, col), saved);
             recomputeDependentsOnEdit(row, col);
         }

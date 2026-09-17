@@ -55,12 +55,14 @@ public class CellDialog extends JDialog {
 
     private final JTextField valueField = new JTextField(42);
     private final JTextField dataTypeField = new JTextField(8);
+    private final JTextField nodeTypeField = new JTextField(8);
     private final JLabel posLabel = new JLabel(" ");
     private final JLabel typeLabel = new JLabel(" ");
     private final JTextArea exprArea = new JTextArea(12, 55);
     private final JTextArea stringArea = new JTextArea(12, 55);
     private final JTextArea xmlArea = new JTextArea(12, 55);
     private final JTextArea refArea = new JTextArea(12, 55);
+    private final JTextArea depArea = new JTextArea(12, 55);
     private final Cell cell;
     private final FunctionRegistry registry;
     private final Map<String, Object> bindings;
@@ -68,7 +70,7 @@ public class CellDialog extends JDialog {
     private boolean saved;
     private int selfRow = -1;
     private int selfCol = -1;
-	private List<CellRef>  referencedCells;
+	private Set<CellRef>  referencedCells;
 	private Node lastNode;
 	
     public CellDialog(Frame owner, Cell cell, FunctionRegistry registry, Map<String, Object> bindings) {
@@ -85,6 +87,7 @@ public class CellDialog extends JDialog {
         }
         addTextPopup(valueField);
         addTextPopup(dataTypeField);
+        addTextPopup(nodeTypeField);
         addTextPopup(exprArea);
         valueField.setFont(mono);
 
@@ -108,6 +111,9 @@ public class CellDialog extends JDialog {
         tabs.addChangeListener(e -> refreshTabs());
         tabs.addTab("Optimized string", new JScrollPane(stringArea));
         tabs.addTab("Refs", new JScrollPane(refArea));
+        tabs.addTab("Deps", new JScrollPane(depArea));
+		List<CellRef> deps = cell.getDependents();
+        depArea.setText(deps.isEmpty() ? "" : deps.toString());
 
         // Point 2: datatype placed right after the value, on the same line.
         JPanel valueRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
@@ -115,6 +121,8 @@ public class CellDialog extends JDialog {
         valueRow.add(valueField);
         valueRow.add(new JLabel("DataType:"));
         valueRow.add(dataTypeField);
+        valueRow.add(new JLabel(" "));
+        valueRow.add(nodeTypeField);
 
         JButton cancel = new JButton("CANCEL");
         JButton save = new JButton("SAVE");
@@ -136,6 +144,7 @@ public class CellDialog extends JDialog {
 		if (cell == null){
             valueField.setText("");
 			dataTypeField.setText(DataType.ANY.name());
+			nodeTypeField.setText("-");
 			exprArea.setText("");
             refreshTabs();
 			return;
@@ -150,10 +159,12 @@ public class CellDialog extends JDialog {
         dataType = cell.getType();
         dataTypeField.setText(dataType.name());
         Node saved = cell.getExpression();
+		String nodeClassName = saved == null?"":(" "+saved.getClass().getSimpleName());
+ 		nodeTypeField.setText((saved != null?"X":"C")+nodeClassName);
         if (saved != null) {
             stringArea.setText(saved.toText());
             xmlArea.setText(nodeXml(saved));
-            List<CellRef> refs = saved.collectReferenced();
+            Set<CellRef> refs = saved.collectReferenced();
             refArea.setText(refs.isEmpty() ? "" : refs.toString());
         } else {
             refreshTabs();
@@ -172,15 +183,15 @@ public class CellDialog extends JDialog {
             Node optimized = e.getOptimized();
             stringArea.setText(optimized == null ? "" : optimized.toText());
             xmlArea.setText(e.toOptimizedXml());
-            List<CellRef> refs = optimized == null
-                    ? new ArrayList<>() : optimized.collectReferenced();
+            Set<CellRef>  refs = optimized == null
+                    ?  new LinkedHashSet<>() : optimized.collectReferenced();
             refArea.setText(refs.isEmpty() ? "" : refs.toString());        } catch (Exception ex) {
             stringArea.setText("");
             xmlArea.setText("Error: " + ex.getMessage());
         }
     }
 
-    private boolean isCircular(List<CellRef> refs) {
+    private boolean isCircular(Set<CellRef> refs) {
         if (selfRow < 0 || selfCol < 1) {
             return false;
         }
@@ -200,8 +211,8 @@ public class CellDialog extends JDialog {
             exprArea.setText(text);
             stringArea.setText(optimized == null ? "" : optimized.toText());
             xmlArea.setText(e.toOptimizedXml());
-            List<CellRef> refs = optimized == null
-                    ? new ArrayList<>() : optimized.collectReferenced();
+            Set<CellRef> refs = optimized == null
+                    ? new LinkedHashSet<>() : optimized.collectReferenced();
             if (isCircular(refs)) {
                 valueField.setText("[ERROR] circular dependency");
                 JOptionPane.showMessageDialog(this,
@@ -260,7 +271,9 @@ public class CellDialog extends JDialog {
     public DataType getEditedDataType() {
         return dataType;
     }
-	public List<CellRef> getEditedReferencedCells(){
+	public Set<CellRef> getEditedReferencedCells(){
+		if (referencedCells==null || referencedCells.isEmpty())
+			return null;
         return referencedCells;
     }
     public Node getEditedNode() {

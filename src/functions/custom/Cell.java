@@ -10,10 +10,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import expr.DataType;
 import expr.EvalUtil;
 import expr.Node;
+import expr.ConstantNode;
 import expr.ExpressionException;
 import expr.CellRef;
 
@@ -34,7 +37,7 @@ public class Cell {
     private String textValue;
     private String rawExpression;
     private List<CellRef> dependents = new ArrayList<>();
-    private List<CellRef> referenced = new ArrayList<>();
+    private Set<CellRef> referenced;
 
     private boolean bold;
     private Color background;
@@ -42,6 +45,18 @@ public class Cell {
 
     public Cell(DataType type, Object value) {
         this(type, value, null, null, null);
+    }
+	
+    public Cell(CellRef ref, String rawText) {
+        Cell base = parse(rawText == null ? "" : rawText);
+        this.type = base.getType();
+        this.value = base.getValue();
+        this.textValue = rawText;
+        this.rawExpression = rawText;
+        Object v = base.getValue();
+        Object cv = (v instanceof Number || v instanceof Boolean || v instanceof String)
+                ? v : base.display();
+        this.expression = new ConstantNode(cv);
     }
 
     public Cell(DataType type, Object value, Node expression, String textValue, String rawExpression) {
@@ -81,13 +96,21 @@ public class Cell {
         this.type = type;
     }
 
-    public void setReferenced(List<CellRef> refs) {
-        referenced.clear();
-        if (refs != null) {
+    public void setReferenced(Set<CellRef> refs) {
+        if (refs == null || refs.isEmpty())
+			referenced = null;
+		else {
+			if (referenced == null)
+				referenced = new LinkedHashSet<>();
+			else
+				referenced.clear();
             referenced.addAll(refs);
         }
     }
-     public void setDependents(List<CellRef> refs) {
+	public Set<CellRef> getReferenced() {
+        return referenced;
+    }
+	public void setDependents(List<CellRef> refs) {
         dependents.clear();
         if (refs != null) {
             dependents.addAll(refs);
