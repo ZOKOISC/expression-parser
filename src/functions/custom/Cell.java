@@ -360,14 +360,19 @@ public class Cell {
     private boolean recalculating;
 
     public void recalculate(CellRef self, Map<String, Cell> cellMap, Map<String, Object> bindings, FunctionRegistry registry) {
+        recalculate(self, cellMap, bindings, registry, null);
+    }
+
+    public void recalculate(CellRef self, Map<String, Cell> cellMap, Map<String, Object> bindings, FunctionRegistry registry, SheetBook book) {
         if (expression == null || recalculating) {
             return;
         }
         recalculating = true;
         try {
+            FunctionRegistry reg = registryFor(registry, book, self.getSheet());
             Object v;
             try {
-                v = expression.evaluate(bindings, registry);
+                v = expression.evaluate(bindings, reg);
             } catch (RuntimeException ex) {
                 v = null;
             }
@@ -378,11 +383,20 @@ public class Cell {
             for (CellRef d : dependents.getList()) {
                 Cell dc = cellMap.get(d.toString());
                 if (dc != null) {
-                    dc.recalculate(d, cellMap, bindings, registry);
+                    dc.recalculate(d, cellMap, bindings, registryFor(registry, book, d.getSheet()), book);
                 }
             }
         } finally {
             recalculating = false;
         }
+    }
+
+    private static FunctionRegistry registryFor(FunctionRegistry fallback, SheetBook book, int sheetIndex) {
+        if (book == null) {
+            return fallback;
+        }
+        Sheet s = book.get(sheetIndex);
+        FunctionRegistry r = s == null ? null : s.registry();
+        return r == null ? fallback : r;
     }
 }

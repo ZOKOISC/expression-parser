@@ -201,7 +201,7 @@ public class CellDialog extends JDialog {
         if (selfRow < 0 || selfCol < 1) {
             return false;
         }
-        return refs.contains(new CellRef(selfRow, selfCol - 1));
+        return refs.contains(new CellRef(CellRef.CURRENT_SHEET, selfRow, selfCol - 1));
     }
 	
 	

@@ -67,15 +67,28 @@ public abstract class Node {
 
     private static void collectRefs(Node n, Set<CellRef> out) {
         if (n instanceof FunctionNode f) {
-            if (f.getName().equalsIgnoreCase("get") && f.getParams().size() >= 2) {
-                Node rn = f.getParams().get(0);
-                Node cn = f.getParams().get(1);
-                if (rn instanceof ConstantNode rc && cn instanceof ConstantNode cc
-                        && rc.getType() == DataType.NUMERIC && cc.getType() == DataType.NUMERIC
-                        && Math.floor(rc.numericValue()) == rc.numericValue()
-                        && Math.floor(cc.numericValue()) == cc.numericValue()) {
-                    out.add(new CellRef(((int) rc.numericValue()) - 1,
-                            ((int) cc.numericValue()) - 1));
+            if (f.getName().equalsIgnoreCase("get")) {
+                int size = f.getParams().size();
+                if (size >= 2) {
+                    Node rn = f.getParams().get(size == 3 ? 1 : 0);
+                    Node cn = f.getParams().get(size == 3 ? 2 : 1);
+                    if (rn instanceof ConstantNode rc && cn instanceof ConstantNode cc
+                            && rc.getType() == DataType.NUMERIC && cc.getType() == DataType.NUMERIC
+                            && Math.floor(rc.numericValue()) == rc.numericValue()
+                            && Math.floor(cc.numericValue()) == cc.numericValue()) {
+                        int sheet = CellRef.CURRENT_SHEET;
+                        if (size == 3) {
+                            Node sn = f.getParams().get(0);
+                            if (sn instanceof ConstantNode sc
+                                    && sc.getType() == DataType.NUMERIC
+                                    && Math.floor(sc.numericValue()) == sc.numericValue()) {
+                                sheet = ((int) sc.numericValue()) - 1;
+                            }
+                        }
+                        out.add(new CellRef(sheet,
+                                ((int) rc.numericValue()) - 1,
+                                ((int) cc.numericValue()) - 1));
+                    }
                 }
             }
             for (Node p : f.getParams()) {

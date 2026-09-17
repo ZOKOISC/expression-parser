@@ -234,7 +234,7 @@ public class Main {
         System.out.println("All checks passed.");
 
         System.out.println("Launching GUI...");
-        SwingUtilities.invokeLater(Gui::new);
+        SwingUtilities.invokeLater(SheetGui::new);
     }
 
     private static void check(String expr, Map<String, Object> bindings, Object expected) {
