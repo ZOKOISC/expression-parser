@@ -19,6 +19,7 @@ import expr.Node;
 import expr.ConstantNode;
 import expr.ExpressionException;
 import expr.CellRef;
+import functions.FunctionRegistry;
 
 /**
  * A spreadsheet cell. Holds an optional parsed expression tree (Node),
@@ -366,5 +367,33 @@ public class Cell {
     public String toString() {
         return display();
     }
+    private boolean recalculating;
 
+    public void recalculate(Map<String, Cell> cellMap, Map<String, Object> bindings, FunctionRegistry registry) {
+        if (expression == null || recalculating) {
+            return;
+        }
+        recalculating = true;
+        try {
+            Object v;
+            try {
+                v = expression.evaluate(bindings, registry);
+            } catch (RuntimeException ex) {
+                v = null;
+            }
+            value = v;
+            type = v == null ? DataType.ANY : EvalUtil.valueType(v);
+            textValue = v == null ? "" : EvalUtil.asString(v);
+            if (dependents != null) {
+                for (CellRef d : dependents) {
+                    Cell dc = cellMap.get(d.toString());
+                    if (dc != null) {
+                        dc.recalculate(cellMap, bindings, registry);
+                    }
+                }
+            }
+        } finally {
+            recalculating = false;
+        }
+    }
 }

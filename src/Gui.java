@@ -89,17 +89,8 @@ public class Gui {
         arrayModel.setValueAt("2023-12-25 23:59:59", 1, 2);
         arrayModel.setValueAt("23:59:59", 1, 3);
         arrayTable.setData(arrayModel.buildData());
+		resizeRowNumberColumn(3);
         arrayGrid.setFillsViewportHeight(true);
-        arrayGrid.getModel().addTableModelListener(e -> {
-            if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
-				cellMap.remove(cellKey(e.getFirstRow(), e.getColumn()));
-                String raw = arrayModel.getRawValue(e.getFirstRow(), e.getColumn());
-                Cell cell = Cell.parse(raw);
-                typeLabel.setText(cell.isEmpty() ? " " : "Cell (" + (e.getFirstRow() + 1) + ","
-                        + e.getColumn() + ") type: " + cell.getType().name());
-                recomputeDependentsOnEdit(e.getFirstRow(), e.getColumn());
-            }
-        });
         arrayGrid.getModel().addTableModelListener(e -> {
             if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
                 String key = cellKey(e.getFirstRow(), e.getColumn());
@@ -112,6 +103,16 @@ public class Gui {
                 typeLabel.setText(cell.isEmpty() ? " " : "Cell (" + (e.getFirstRow() + 1) + ","
                         + e.getColumn() + ") type: " + cell.getType().name());
                 recomputeDependentsOnEdit(e.getFirstRow(), e.getColumn());
+            }
+        });
+        arrayGrid.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger()) showCellMenu(e);
+            }
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger()) showCellMenu(e);
             }
         });
 
@@ -327,10 +328,29 @@ public class Gui {
             arrayTable.setData(arrayModel.buildData());
             Warnings.clear();
             doEvaluate();
+            Cell edited = cellMap.get(cellKey(row, col));
+            if (edited != null) {
+                edited.recalculate(cellMap, parseBindings(varsArea.getText()), registry);
+                arrayModel.setRawValue(row, col, edited.display());
+                for (CellRef dep : edited.getDependents()) {
+                    Cell dc = cellMap.get(dep.toString());
+                    if (dc != null) {
+                        arrayModel.setRawValue(dep.getRow(), dep.getCol() + 1, dc.display());
+                    }
+                }
+                arrayTable.setData(arrayModel.buildData());
+                arrayGrid.repaint();
+            }
             setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed.");
         } catch (Exception ex) {
             showError(ex);
         }
+    }	
+	private void resizeRowNumberColumn(int rows) {
+        int digits = String.valueOf(rows).length();
+        int w = digits * 8 + 12;
+        arrayGrid.getColumnModel().getColumn(0).setPreferredWidth(w);
+        arrayGrid.getColumnModel().getColumn(0).setMaxWidth(w);
     }
 
     private void doCreateArray() {
@@ -341,6 +361,7 @@ public class Gui {
                 throw new IllegalArgumentException("Rows and columns must be between 1 and 100.");
             }
             arrayModel.setDimension(rows, cols);
+			resizeRowNumberColumn(rows);
 			cellMap.clear();
             arrayTable.setData(arrayModel.buildData());
             setStatus("Array created: " + rows + "x" + cols + ". Fill in the cells and use get(row,col).");
@@ -452,6 +473,12 @@ public class Gui {
             if (col == 0 || row < 0 || row >= cells.length) return "";
             String s = cells[row][col - 1];
             return s == null ? "" : s;
+        }
+		
+        void setRawValue(int row, int col, String value) {
+            if (col > 0 && row >= 0 && row < cells.length) {
+                cells[row][col - 1] = String.valueOf(value).trim();
+            }
         }
 
         Cell[][] buildData() {
