@@ -15,6 +15,11 @@ public class ArrayModel extends AbstractTableModel {
         return sheet.rows();
     }
 
+    public void setSheetSize(int rows, int cols) {
+        sheet.setSize(rows, cols);
+        fireTableStructureChanged();
+    }
+
     @Override
     public int getColumnCount() {
         return sheet.rows() == 0 ? 0 : sheet.cols() + 1;

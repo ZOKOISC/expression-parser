@@ -14,4 +14,5 @@ if errorlevel 1 (
 )
 
 echo GUI inditasa...
-java -cp out Gui
+java -cp out Gui 2> debug_err.log
+pause

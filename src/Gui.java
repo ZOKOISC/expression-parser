@@ -45,13 +45,21 @@ import functions.custom.Cell;
 import functions.custom.CellDialog;
 import functions.custom.ArrayModel;
 import functions.custom.CellProvider;
+import functions.custom.Sheet;
 
 public class Gui {
 
+    private final JTextField exprField = new JTextField();
+    private final JTextArea varsArea = new JTextArea(5, 40);
+    private final JTextArea output = new JTextArea();
+    private final JLabel status = new JLabel(" ");
+    private final JTextField rowsField = new JTextField("3", 3);
+    private final JTextField colsField = new JTextField("3", 3);
     private final Map<String, Object> bindings = new LinkedHashMap<>();
     private final FunctionRegistry registry;
     private final Sheet sheet = new Sheet();
-    private final JTable arrayGrid = new JTable(new ArrayModel(sheet));
+    private final ArrayModel arrayModel = new ArrayModel(sheet);
+    private final JTable arrayGrid = new JTable(arrayModel);
     private final JLabel typeLabel = new JLabel(" ");
 	
     public static void main(String[] args) {
@@ -62,7 +70,7 @@ public class Gui {
         Font mono = new Font(Font.MONOSPACED, Font.PLAIN, 13);
 
         registry = MathFunctions.createRegistry();
-		registry.register(new ArrayGetFunction(sheet));        exprField.setFont(mono);
+		registry.register(new ArrayGetFunction(sheet));
         exprField.setText("addDays(get(2,1), 30)");
 
         varsArea.setFont(mono);
@@ -72,7 +80,7 @@ public class Gui {
         output.setEditable(false);
         output.setLineWrap(false);
 
-        sheet.setSize(3, 3);
+        arrayModel.setSheetSize(3, 3);
         sheet.setRawValue(0, 1, "13");
         sheet.setRawValue(0, 2, "'hello'");
         sheet.setRawValue(0, 3, "true");
@@ -83,7 +91,6 @@ public class Gui {
         arrayGrid.setFillsViewportHeight(true);
         arrayGrid.getModel().addTableModelListener(e -> {
             if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
-                String key = cellKey(e.getFirstRow(), e.getColumn());
                 Cell existing = sheet.registeredCell(e.getFirstRow(), e.getColumn());
                 String raw = sheet.getRawValue(e.getFirstRow(), e.getColumn());
                 if (existing != null) {
@@ -239,6 +246,10 @@ public class Gui {
             JMenuItem item = new JMenuItem(dt.name());
             item.addActionListener(ev -> {
                 try {
+                    Cell converted = cell.convertTo(dt);
+                    String storedText = converted.getType() == expr.DataType.STRING
+                            ? "\"" + converted.display() + "\""
+                            : converted.getTextValue();
                     sheet.setRawValue(row, col, storedText);
                     cell.updateValue(storedText);
                     recomputeDependentsOnEdit(row, col);
@@ -305,7 +316,7 @@ public class Gui {
             if (rows < 1 || cols < 1 || rows > 100 || cols > 100) {
                 throw new IllegalArgumentException("Rows and columns must be between 1 and 100.");
             }
-            sheet.setSize(rows, cols);
+            arrayModel.setSheetSize(rows, cols);
 			resizeRowNumberColumn(rows);
             setStatus("Array created: " + rows + "x" + cols + ". Fill in the cells and use get(row,col).");
         } catch (Exception ex) {
