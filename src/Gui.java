@@ -100,14 +100,18 @@ public class Gui {
                 recomputeDependentsOnEdit(e.getFirstRow(), e.getColumn());
             }
         });
-        arrayGrid.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mousePressed(MouseEvent e) {
-                if (e.isPopupTrigger()) showCellMenu(e);
-            }
-            @Override
-            public void mouseReleased(MouseEvent e) {
-                if (e.isPopupTrigger()) showCellMenu(e);
+        arrayGrid.getModel().addTableModelListener(e -> {
+            if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
+                String key = cellKey(e.getFirstRow(), e.getColumn());
+                Cell existing = cellMap.get(key);
+                String raw = arrayModel.getRawValue(e.getFirstRow(), e.getColumn());
+                if (existing != null) {
+                    existing.updateValue(raw);
+                }
+                Cell cell = existing == null ? Cell.parse(raw) : existing;
+                typeLabel.setText(cell.isEmpty() ? " " : "Cell (" + (e.getFirstRow() + 1) + ","
+                        + e.getColumn() + ") type: " + cell.getType().name());
+                recomputeDependentsOnEdit(e.getFirstRow(), e.getColumn());
             }
         });
 
@@ -241,6 +245,7 @@ public class Gui {
         if (row < 0 || col <= 0) return;
         Cell cell = cellMap.computeIfAbsent(cellKey(row, col),
                 k -> Cell.parse(arrayModel.getRawValue(row, col)));
+		System.out.println("MENU key=" + cellKey(row, col) + " node=" + (cell.getExpression() == null ? "null" : cell.getExpression().getClass().getSimpleName()) + " deps=" + cell.getDependents());
 		JPopupMenu menu = new JPopupMenu();
         JMenu typeMenu = new JMenu("Convert type");
         for (expr.DataType dt : expr.DataType.values()) {
@@ -290,7 +295,12 @@ public class Gui {
             Cell saved = Cell.parse(text == null ? "" : text);
             saved.setRawExpression(dlg.getEditedRawExpression());
             saved.setType(dlg.getEditedDataType());
-			saved.setExpression(dlg.getEditedNode());
+            saved.setExpression(dlg.getEditedNode());
+            saved.setReferenced(dlg.getEditedReferencedCells());
+            Cell prev = cellMap.get(cellKey(row, col));
+            if (prev != null) {
+                saved.setDependents(prev.getDependents());
+            }
             Set<CellRef> refs = saved.getReferenced();
             CellRef selfRef = new CellRef(row, col - 1);
             if (refs != null) {
@@ -304,12 +314,13 @@ public class Gui {
                     } else if (referenced.getExpression() == null) {
                         referenced.setExpression(referenced.constantNode());
                     }
-                    referenced.addDependent(selfRef);                }
+                    referenced.addDependent(selfRef);
+                }
             }
-            cellMap.put(cellKey(row, col), saved);            cellMap.put(cellKey(row, col), saved);
+            cellMap.put(cellKey(row, col), saved);
             recomputeDependentsOnEdit(row, col);
         }
-    }
+	}
 
     private void recomputeDependentsOnEdit(int row, int col) {
         try {

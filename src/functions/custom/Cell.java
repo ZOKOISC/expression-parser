@@ -89,6 +89,19 @@ public class Cell {
         this.expression = expression;
     }
 	
+	public void updateValue(String rawText) {
+        Cell parsed = parse(rawText == null ? "" : rawText);
+        this.type = parsed.getType();
+        this.value = parsed.getValue();
+        this.textValue = rawText;
+        this.rawExpression = rawText;
+        Object v = parsed.getValue();
+        Object cv = (v instanceof Number || v instanceof Boolean || v instanceof String)
+                ? v : parsed.display();
+        this.expression = new ConstantNode(cv);
+        this.referenced = null;
+    }
+	
     public ConstantNode constantNode() {
         Object v = value;
         Object cv = (v instanceof Number || v instanceof Boolean || v instanceof String)

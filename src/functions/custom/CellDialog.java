@@ -269,6 +269,10 @@ public class CellDialog extends JDialog {
         } else {
             lastNode = null;
         }
+        System.out.println("DOSAVE raw='" + raw + "' lastNode="
+                + (lastNode == null ? "null" : lastNode.getClass().getSimpleName())
+                + " text=" + (lastNode == null ? "" : lastNode.toText())
+                + " refs=" + (lastNode == null ? "null" : lastNode.collectReferenced()));
 		referencedCells = lastNode == null ? null : lastNode.collectReferenced();
         saved = true;
         dispose();
