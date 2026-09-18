@@ -248,7 +248,6 @@ public class SheetGui {
         int col = v.grid.columnAtPoint(e.getPoint());
         if (row < 0 || col <= 0) return;
         Cell cell = v.sheet.cell(row, col);
-        System.err.println("CELL row=" + row + " col=" + col + " value=" + cell.getValue() + " raw=" + v.sheet.getRawValue(row, col));
         JPopupMenu menu = new JPopupMenu();
         JMenu typeMenu = new JMenu("Convert type");
         for (DataType dt : DataType.values()) {
@@ -294,7 +293,12 @@ public class SheetGui {
     }
 
     private void showEditDialog(SheetView v, int row, int col, Cell cell) {
-        v.sheet.setBindingsText(varsArea.getText());
+        try {
+            v.sheet.setBindingsText(varsArea.getText());
+        } catch (Exception ex) {
+            showError(ex);
+            return;
+        }
         CellDialog dlg = new CellDialog((Frame) SwingUtilities.getWindowAncestor(v.grid),
                 cell, v.sheet.registry(), v.sheet.bindings());
         dlg.setPosition(row, col);

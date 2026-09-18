@@ -10,6 +10,9 @@ import expr.DataType;
 import expr.EvalUtil;
 import expr.ExpressionException;
 import expr.Node;
+import functions.custom.GrossFunction;
+import functions.custom.NetFunction;
+import functions.custom.TaxFunction;
 
 public final class MathFunctions {
 
@@ -67,6 +70,9 @@ public final class MathFunctions {
                 d -> (d instanceof LocalDateTime ldt) ? ldt.toLocalDate() : d));
         reg.register(toDateTimeFunction());
         reg.register(timeOfFunction());
+        reg.register(new TaxFunction());
+        reg.register(new NetFunction());
+        reg.register(new GrossFunction());
 
         return reg;
     }

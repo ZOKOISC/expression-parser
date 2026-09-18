@@ -47,6 +47,8 @@ public abstract class Node {
                 return FunctionNode.fromXml(el);
             case "IF":
                 return IfNode.fromXml(el);
+            case "ARRAYACCESS":
+                return ArrayAccessNode.fromXml(el);
             default:
                 throw new ExpressionException("Unknown XML node kind: " + kind);
         }
@@ -107,6 +109,9 @@ public abstract class Node {
             for (Node c : on.getChildren()) {
                 collectRefs(c, out);
             }
+        } else if (n instanceof ArrayAccessNode aa) {
+            collectRefs(aa.getRowExpr(), out);
+            collectRefs(aa.getColExpr(), out);
         }
     }
 }

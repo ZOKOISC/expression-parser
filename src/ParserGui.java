@@ -150,36 +150,6 @@ public class ParserGui {
     }
 
     private static Map<String, Object> parseBindings(String text) {
-        Map<String, Object> bindings = new LinkedHashMap<>();
-        for (String line : text.split("\\R")) {
-            String s = line.trim();
-            if (s.isEmpty() || s.startsWith("#")) continue;
-            int eq = s.indexOf('=');
-            if (eq < 0) {
-                throw new IllegalArgumentException("Invalid binding (expected 'name = value'): " + s);
-            }
-            String name = s.substring(0, eq).trim();
-            if (name.isEmpty()) {
-                throw new IllegalArgumentException("Missing variable name in: " + s);
-            }
-            bindings.put(name, parseValue(s.substring(eq + 1).trim()));
-        }
-        return bindings;
-    }
-
-    private static Object parseValue(String t) {
-        if (t.length() >= 2) {
-            char q = t.charAt(0);
-            if ((q == '\'' || q == '"') && t.charAt(t.length() - 1) == q) {
-                return t.substring(1, t.length() - 1);
-            }
-        }
-        if (t.equalsIgnoreCase("true")) return Boolean.TRUE;
-        if (t.equalsIgnoreCase("false")) return Boolean.FALSE;
-        try {
-            return Double.parseDouble(t);
-        } catch (NumberFormatException ignored) {
-            return t;
-        }
+        return functions.custom.Sheet.parseBindings(text);
     }
 }

@@ -17,6 +17,7 @@ import functions.custom.ArrayGetFunction;
 import functions.custom.ArrayTable;
 import functions.custom.Cell;
 import functions.custom.FactorialFunction;
+import functions.custom.Sheet;
 
 public class Main {
 
@@ -217,6 +218,72 @@ public class Main {
         checkReg("toDateTime(get(1,4), '00:05:00')", mixReg, null, LocalDateTime.of(2024, 2, 1, 0, 5, 0));
         checkReg("'time: ' + timeOf(get(1,4))", mixReg, null, "time: 08:15:30");
         checkReg("timeOf(get(1,4)) & ' done'", mixReg, null, "08:15:30 done");
+
+        System.out.println();
+        System.out.println("=== Array variables (a[rows,cols]={{...}}) ===\n");
+
+        Map<String, Object> arrayBindings = Sheet.parseBindings(
+                "a[3,2]={{0,0},{100,0.10},{200,0.25}};\nrate = 0.5;\nTAXBASE[3,2]={{0,0},{100,0.10},{200,0.25}};");
+        check("a[0,0]", arrayBindings, 0.0);
+        check("a[0,1]", arrayBindings, 0.0);
+        check("a[1,0]", arrayBindings, 100.0);
+        check("a[1,1]", arrayBindings, 0.1);
+        check("a[2,0]", arrayBindings, 200.0);
+        check("a[2,1]", arrayBindings, 0.25);
+        check("a[1,0] + a[2,0]", arrayBindings, 300.0);
+        check("a[1,0] * rate", arrayBindings, 50.0);
+        check("a[2,1] * 4", arrayBindings, 1.0);
+        check("a[1,0] / a[1,0]", arrayBindings, 1.0);
+
+        System.out.println();
+        System.out.println("=== Progressive tax function (tax(array, gross)) ===\n");
+
+        Map<String, Object> taxBindings = Sheet.parseBindings(
+                "TAXBASE[3,2]={{0,0},{100,0.10},{200,0.25}};");
+        check("tax(TAXBASE, 0)", taxBindings, 0.0);
+        check("tax(TAXBASE, 100)", taxBindings, 0.0);
+        check("tax(TAXBASE, 150)", taxBindings, 5.0);
+        check("tax(TAXBASE, 200)", taxBindings, 10.0);
+        check("tax(TAXBASE, 250)", taxBindings, 22.5);
+        check("tax(TAXBASE, 50)", taxBindings, 0.0);
+        check("tax(TAXBASE, -10)", taxBindings, 0.0);
+        check("tax(TAXBASE, 1000)", taxBindings, 210.0);
+        check("tax(TAXBASE, 250) * 2", taxBindings, 45.0);
+        check("tax(TAXBASE, 250) + a[2,1]", arrayBindings, 22.75);
+
+        System.out.println();
+        System.out.println("=== Net function (net(array, gross)) ===\n");
+
+        check("net(TAXBASE, 0)", taxBindings, 0.0);
+        check("net(TAXBASE, 100)", taxBindings, 100.0);
+        check("net(TAXBASE, 150)", taxBindings, 145.0);
+        check("net(TAXBASE, 200)", taxBindings, 190.0);
+        check("net(TAXBASE, 250)", taxBindings, 227.5);
+        check("net(TAXBASE, 1000)", taxBindings, 790.0);
+        check("net(TAXBASE, 250) - tax(TAXBASE, 250)", taxBindings, 227.5 - 22.5);
+
+        System.out.println();
+        System.out.println("=== Gross function (gross(array, net)) ===\n");
+
+        check("gross(TAXBASE, 0)", taxBindings, 0.0);
+        check("gross(TAXBASE, 50)", taxBindings, 50.0);
+        check("gross(TAXBASE, 100)", taxBindings, 100.0);
+        check("gross(TAXBASE, 145)", taxBindings, 150.0);
+        check("gross(TAXBASE, 190)", taxBindings, 200.0);
+        check("gross(TAXBASE, 227.5)", taxBindings, 250.0);
+        check("gross(TAXBASE, 790)", taxBindings, 1000.0);
+        check("gross(TAXBASE, net(TAXBASE, 250))", taxBindings, 250.0);
+        check("net(TAXBASE, gross(TAXBASE, 790))", taxBindings, 790.0);
+
+        System.out.println();
+        System.out.println("=== Tax array without leading 0% bracket ===\n");
+
+        Map<String, Object> spareBindings = Sheet.parseBindings(
+                "B[2,2]={{100,0.10},{200,0.25}};");
+        check("tax(B, 250)", spareBindings, 22.5);
+        check("net(B, 250)", spareBindings, 227.5);
+        check("gross(B, 227.5)", spareBindings, 250.0);
+        check("gross(B, 50)", spareBindings, 50.0);
 
         System.out.println();
         System.out.println("=== XML round-trip ===\n");

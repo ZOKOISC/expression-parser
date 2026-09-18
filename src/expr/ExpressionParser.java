@@ -5,7 +5,7 @@ import java.util.List;
 
 public class ExpressionParser {
 
-    private enum TokenType { NUMBER, STRING, IDENT, OP, LPAREN, RPAREN, COMMA, EOF }
+    private enum TokenType { NUMBER, STRING, IDENT, OP, LPAREN, RPAREN, COMMA, LBRACKET, RBRACKET, EOF }
 
     private static final class Token {
         final TokenType type;
@@ -115,6 +115,8 @@ public class ExpressionParser {
                 case '(' -> { tokens.add(new Token(TokenType.LPAREN, "(", null, null)); i++; }
                 case ')' -> { tokens.add(new Token(TokenType.RPAREN, ")", null, null)); i++; }
                 case ',' -> { tokens.add(new Token(TokenType.COMMA, ",", null, null)); i++; }
+                case '[' -> { tokens.add(new Token(TokenType.LBRACKET, "[", null, null)); i++; }
+                case ']' -> { tokens.add(new Token(TokenType.RBRACKET, "]", null, null)); i++; }
                 case '+' -> { tokens.add(new Token(TokenType.OP, "+", Operation.ADD, null)); i++; }
                 case '-' -> { tokens.add(new Token(TokenType.OP, "-", Operation.SUB, null)); i++; }
                 case '*' -> { tokens.add(new Token(TokenType.OP, "*", Operation.MUL, null)); i++; }
@@ -314,6 +316,14 @@ public class ExpressionParser {
                     }
                     expect(TokenType.RPAREN);
                     return new FunctionNode(name, args);
+                }
+                if (peek().type == TokenType.LBRACKET) {
+                    next();
+                    Node rowExpr = parseOr();
+                    expect(TokenType.COMMA);
+                    Node colExpr = parseOr();
+                    expect(TokenType.RBRACKET);
+                    return new ArrayAccessNode(name, rowExpr, colExpr);
                 }
                 return new VariableNode(name);
             }

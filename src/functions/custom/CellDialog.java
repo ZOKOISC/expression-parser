@@ -59,7 +59,7 @@ public class CellDialog extends JDialog {
     private final JTextField dataTypeField = new JTextField(8);
     private final JTextField nodeTypeField = new JTextField(10);
     private final JTextField formatField = new JTextField(12);
-    private final JComboBox<String> alignmentCombo = new JComboBox<>(new String[]{"Left", "Right", "Center"});
+    private final JComboBox<String> alignmentCombo = new JComboBox<>(new String[]{"Default", "Left", "Right", "Center"});
     private final JLabel posLabel = new JLabel(" ");
     private final JLabel typeLabel = new JLabel(" ");
     private final JTextArea exprArea = new JTextArea(12, 55);
@@ -171,7 +171,7 @@ public class CellDialog extends JDialog {
         formatPattern = cell.getFormatPattern();
         formatField.setText(formatPattern == null ? "" : formatPattern);
         String al = cell.getHorizontalAlignment();
-        alignmentCombo.setSelectedItem(al != null ? al : "Left");
+        alignmentCombo.setSelectedItem(al != null ? al : "Default");
         Node saved = cell.getExpression();
 		String nodeClassName = saved == null?"":(" "+saved.getClass().getSimpleName());
  		nodeTypeField.setText((saved != null?"X":"C")+nodeClassName);
@@ -274,8 +274,8 @@ public class CellDialog extends JDialog {
     private void doSave() {
         String raw = exprArea.getText();
         formatPattern = formatField.getText().trim();
-        alignmentCombo.getSelectedItem();
-        this.alignment = alignmentCombo.getSelectedItem() != null ? alignmentCombo.getSelectedItem().toString() : "Left";
+        Object sel = alignmentCombo.getSelectedItem();
+        this.alignment = sel != null && !"Default".equals(sel) ? sel.toString() : "";
         if (raw == null || raw.trim().isEmpty()) {
             raw = cell.getRawExpression();
         }
@@ -288,11 +288,6 @@ public class CellDialog extends JDialog {
         } else {
             lastNode = null;
         }
-        System.out.println("DOSAVE raw='" + raw + "' lastNode="
-                + (lastNode == null ? "null" : lastNode.getClass().getSimpleName())
-                + " text=" + (lastNode == null ? "" : lastNode.toText())
-                + " refs=" + (lastNode == null ? "null" : lastNode.collectReferenced())
-                + " format=" + formatPattern + " align=" + this.alignment);
 		referencedCells = lastNode == null ? null : lastNode.collectReferenced();
         saved = true;
         dispose();

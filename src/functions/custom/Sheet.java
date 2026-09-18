@@ -1,8 +1,10 @@
 package functions.custom;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -287,20 +289,92 @@ public class Sheet implements CellProvider {
 
     public static Map<String, Object> parseBindings(String text) {
         Map<String, Object> parsed = new LinkedHashMap<>();
-        for (String line : text.split("\\R")) {
-            String s = line.trim();
+        for (String s : splitDefinitions(text)) {
+            s = s.trim();
             if (s.isEmpty() || s.startsWith("#")) continue;
             int eq = s.indexOf('=');
             if (eq < 0) {
-                throw new IllegalArgumentException("Invalid binding (expected 'name = value'): " + s);
+                throw new IllegalArgumentException("Invalid binding (expected 'name = value;'): " + s);
             }
             String name = s.substring(0, eq).trim();
             if (name.isEmpty()) {
                 throw new IllegalArgumentException("Missing variable name in: " + s);
             }
-            parsed.put(name, parseValue(s.substring(eq + 1).trim()));
+            String valueStr = s.substring(eq + 1).trim();
+            if (name.matches("\\w+\\[\\s*\\d+\\s*,\\s*\\d+\\s*\\]")) {
+                String[] parts = name.split("\\[");
+                String varName = parts[0];
+                String[] dims = parts[1].replace("]", "").split(",");
+                int rows = Integer.parseInt(dims[0].trim());
+                int cols = Integer.parseInt(dims[1].trim());
+                double[][] arr = parseArrayLiteral(valueStr, rows, cols);
+                parsed.put(varName, arr);
+            } else {
+                parsed.put(name, parseValue(valueStr));
+            }
         }
         return parsed;
+    }
+
+    private static List<String> splitDefinitions(String text) {
+        List<String> defs = new ArrayList<>();
+        int start = 0;
+        char quote = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (quote != 0) {
+                if (c == quote) quote = 0;
+                continue;
+            }
+            if (c == '\'' || c == '"') {
+                quote = c;
+                continue;
+            }
+            if (c == ';' || c == '\n' || c == '\r') {
+                defs.add(text.substring(start, i));
+                start = i + 1;
+            }
+        }
+        defs.add(text.substring(start));
+        return defs;
+    }
+
+    private static double[][] parseArrayLiteral(String s, int rows, int cols) {
+        String trimmed = s.trim();
+        if (!trimmed.startsWith("{{") || !trimmed.endsWith("}}")) {
+            throw new IllegalArgumentException("Expected array literal in form {{r1,c1},{r2,c2},...} but got: " + s);
+        }
+        String body = trimmed.substring(1, trimmed.length() - 1);
+        List<String> rowStrs = new ArrayList<>();
+        int start = 0;
+        int depth = 0;
+        for (int i = 0; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (c == '{') depth++;
+            else if (c == '}') depth--;
+            else if (c == ',' && depth == 0) {
+                rowStrs.add(body.substring(start, i));
+                start = i + 1;
+            }
+        }
+        rowStrs.add(body.substring(start));
+        double[][] arr = new double[rows][cols];
+        if (rowStrs.size() != rows) {
+            throw new IllegalArgumentException("Array '" + s + "' declares " + rows + " rows but the literal contains "
+                    + rowStrs.size() + ".");
+        }
+        for (int i = 0; i < rows; i++) {
+            String rowTrimmed = rowStrs.get(i).trim().replaceAll("^\\{", "").replaceAll("\\}$", "");
+            String[] valStrs = rowTrimmed.split(",");
+            if (valStrs.length != cols) {
+                throw new IllegalArgumentException("Array row " + i + " of '" + s + "' declares " + cols
+                        + " columns but the literal contains " + valStrs.length + ".");
+            }
+            for (int j = 0; j < cols; j++) {
+                arr[i][j] = Double.parseDouble(valStrs[j].trim());
+            }
+        }
+        return arr;
     }
 
     private static Object parseValue(String t) {

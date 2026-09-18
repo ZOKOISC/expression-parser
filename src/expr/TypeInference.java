@@ -51,6 +51,9 @@ public final class TypeInference {
             applyVariableTypes(in.getCondition(), vars);
             applyVariableTypes(in.getWhenTrue(), vars);
             applyVariableTypes(in.getWhenFalse(), vars);
+        } else if (n instanceof ArrayAccessNode aa) {
+            applyVariableTypes(aa.getRowExpr(), vars);
+            applyVariableTypes(aa.getColExpr(), vars);
         }
     }
 
@@ -62,6 +65,15 @@ public final class TypeInference {
             DataType t = vars.getOrDefault(v.getName(), DataType.ANY);
             v.setType(t);
             return t;
+        }
+        if (n instanceof ArrayAccessNode aa) {
+            DataType rt = inferNode(aa.getRowExpr(), vars, registry);
+            DataType ct = inferNode(aa.getColExpr(), vars, registry);
+            require(vars, aa.getRowExpr(), DataType.NUMERIC);
+            require(vars, aa.getColExpr(), DataType.NUMERIC);
+            DataType result = DataType.NUMERIC;
+            aa.setType(result);
+            return result;
         }
         if (n instanceof UnaryNode u) {
             DataType childType = inferNode(u.getChild(), vars, registry);

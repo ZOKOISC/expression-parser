@@ -195,6 +195,12 @@ public final class EvalUtil {
                 + (o == null ? "null" : o + " (" + o.getClass().getSimpleName() + ")"));
     }
 
+    public static int asInt(Object o) {
+        if (o instanceof Number n) return (int) Math.floor(n.doubleValue());
+        throw new ExpressionException("Expected an integer value but got: "
+                + (o == null ? "null" : o + " (" + o.getClass().getSimpleName() + ")"));
+    }
+
     public static boolean asBoolean(Object o) {
         if (o instanceof Boolean b) return b;
         throw new ExpressionException("Expected a boolean value but got: "

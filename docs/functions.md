@@ -86,6 +86,43 @@ Behaviour:
 - References to a **deleted** sheet return `null` with a warning (the slot still
   exists but the sheet is closed).
 
+## Tax
+
+| Function | Signature | Result |
+|---|---|---|
+| `tax(array, gross)` | array variable + 1 numeric | progressive tax (numeric) |
+| `net(array, gross)` | array variable + 1 numeric | net amount = `gross - tax` (numeric) |
+| `gross(array, net)` | array variable + 1 numeric | the gross amount whose net equals the argument (numeric) |
+
+The first parameter is an **array variable** whose rows define progressive tax
+brackets: column 0 is the lower bound of each range, column 1 is the marginal
+rate (expressed as a fraction, e.g. `0.10` = 10%). Rows are sorted by threshold
+before computation. Each bracket is applied to the slice of `gross` that falls
+between the bracket's lower bound and the next threshold; the top bracket applies
+above all thresholds.
+
+Example (Hungarian-style simplified):
+
+```
+TAXBASE[3,2]={{0,0},{100,0.10},{200,0.25}};
+tax(TAXBASE, 250)              →  22.5
+  (0-100 at 0% → 0) +
+  (100-200 at 10% → 10) +
+  (200-250 at 25% → 12.5)
+```
+
+A negative or zero gross yields 0. If the array is empty or a row has fewer than
+2 columns, an `ExpressionException` is thrown.
+
+`net(array, gross)` mirrors `tax(...)` and returns what remains after the same
+progressive computation: `gross - tax(array, gross)`.
+
+`gross(array, net)` is the inverse: it returns the gross amount whose net equals
+the argument. It locates the bracket the net falls into and solves
+`gross = threshold + (net - netAtThreshold) / (1 - rate)`. Amounts at or below the
+first threshold pass through unchanged (`gross = net`). A bracket rate of 100% or
+more cannot be inverted and raises an `ExpressionException`.
+
 ## Operator precedence (high → low)
 
 ```
@@ -101,6 +138,11 @@ or           logical or (also ||)
 ```
 
 Implicit multiplication is allowed (`3x`, `2(x+1)`, `(x+1)(x-1)`, `x^2 y`).
+
+Array variables (defined in the Sheet variables box as
+`a[3,2]={{0,0},{100,0.10},{200,0.25}};`) are addressed with 0-based indices:
+`name[row, col]` — e.g. `a[1,0]` → `100`. Indices can be any numeric
+expression; they are truncated with `floor`.
 
 ## Special form
 

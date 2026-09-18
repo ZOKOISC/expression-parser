@@ -22,8 +22,17 @@ Everything compiles into `out/`. If the JVM crashes, the error is written to
 
 Layout, top to bottom:
 
-1. **Variables** — `name = value`, one per line (e.g. `x = 4`, `name = 'World'`).
+1. **Variables** — `name = value;`, one definition per line (e.g. `x = 4;`,
+   `name = 'World';`). Close a definition with a semicolon; a newline also works.
    Values can be numbers, quoted strings, `true`/`false`. `#` starts a comment.
+   A two-dimensional numeric array is defined with the dimensions after the name
+   and a brace-enclosed literal after `=`:
+   ```
+   a[3,2]={{0,0},{100,0.10},{200,0.25}};
+   ```
+   Row/column indices in expressions are 0-based, so `a[1,0]` is `100` and
+   `a[1,1]` is `0.10` for the array above. The declared dimensions must match the
+   literal row and column counts.
 2. **Array dimensions** (`rows`, `columns`) + **Create array**, **Create sheet**,
    **Delete sheet**, and a cell-type readout.
 3. **Tab pages** — one page per sheet (`Sheet 1`, `Sheet 2`, …). The first column
@@ -64,6 +73,10 @@ if(get(1,1) > 10, 'big', 'small')  conditional
 get(2,3,1) * 2                     cell from Sheet 2
 sqrt(get(3,2))                     functions
 x + 5                              variable defined in the Variables box
+a[1,0] * 2                         array variable lookup (0-based index)
+tax(TAXBASE, 250)                  progressive tax from an array variable
+net(TAXBASE, 250)                  gross minus that tax (the net amount)
+gross(TAXBASE, 227.5)              the gross amount for a given net
 3x + 2                             implicit multiplication
 ```
 

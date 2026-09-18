@@ -161,6 +161,9 @@ public class Expression {
             for (Node p : f.getParams()) {
                 collect(p, types);
             }
+        } else if (n instanceof ArrayAccessNode aa) {
+            collect(aa.getRowExpr(), types);
+            collect(aa.getColExpr(), types);
         }
     }
 }
