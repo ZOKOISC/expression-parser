@@ -5,6 +5,11 @@ import java.awt.Font;
 import java.awt.Frame;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.text.DecimalFormat;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -23,7 +28,10 @@ import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import javax.swing.SwingConstants;
 import javax.swing.event.TableModelEvent;
+import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.TableCellRenderer;
 
 import expr.DataType;
 import functions.MathFunctions;
@@ -62,6 +70,7 @@ public class SheetGui {
 
         SheetView first = createSheetView();
         first.model.setSheetSize(3, 3);
+        installRenderers(first);
         first.sheet.loadDefaults();
         tabs.addTab("Sheet " + book.size(), scrollFor(first));
         resizeRowNumberColumn(first.grid, 3);
@@ -145,9 +154,76 @@ public class SheetGui {
         return sheets.get(tabs.getSelectedIndex());
     }
 
+    private static class FormatCellRenderer extends DefaultTableCellRenderer {
+        private final SheetView view;
+
+        FormatCellRenderer(SheetView view) {
+            this.view = view;
+        }
+
+        @Override
+        public java.awt.Component getTableCellRendererComponent(JTable table, Object value,
+                boolean isSelected, boolean hasFocus, int row, int column) {
+            super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            if (column > 0) {
+                Cell cell = view.sheet.cell(row, column);
+                String pat = cell.getFormatPattern();
+                Object val = cell.getValue();
+                if (pat != null && !pat.isEmpty()) {
+                    try {
+                        if (val instanceof LocalDate d) {
+                            setText(d.format(DateTimeFormatter.ofPattern(pat)));
+                        } else if (val instanceof LocalDateTime dt) {
+                            setText(dt.format(DateTimeFormatter.ofPattern(pat)));
+                        } else if (val instanceof LocalTime t) {
+                            setText(t.format(DateTimeFormatter.ofPattern(pat)));
+                        } else if (val instanceof Number n) {
+                            setText(new DecimalFormat(pat).format(n));
+                        }
+                    } catch (Exception ignored) {
+                        // pattern not applicable; keep default label text
+                    }
+                }
+                String al = cell.getHorizontalAlignment();
+                int swingAlign;
+                if (al != null) {
+                    if ("Right".equalsIgnoreCase(al)) {
+                        swingAlign = SwingConstants.RIGHT;
+                    } else if ("Center".equalsIgnoreCase(al)) {
+                        swingAlign = SwingConstants.CENTER;
+                    } else {
+                        swingAlign = SwingConstants.LEFT;
+                    }
+                } else {
+                    DataType dt = cell.getType();
+                    if (dt == DataType.NUMERIC) {
+                        swingAlign = SwingConstants.RIGHT;
+                    } else if (dt == DataType.STRING) {
+                        swingAlign = SwingConstants.LEFT;
+                    } else {
+                        swingAlign = SwingConstants.CENTER;
+                    }
+                }
+                setHorizontalAlignment(swingAlign);
+            } else {
+                setHorizontalAlignment(SwingConstants.CENTER);
+            }
+            return this;
+        }
+    }
+
+    private static void installRenderers(SheetView v) {
+        FormatCellRenderer renderer = new FormatCellRenderer(v);
+        v.grid.setDefaultRenderer(Object.class, renderer);
+        for (int i = 1; i <= v.sheet.cols(); i++) {
+            v.grid.getColumnModel().getColumn(i).setCellRenderer(renderer);
+        }
+    }
+
     private void doCreateSheet() {
         SheetView v = createSheetView();
         v.model.setSheetSize(3, 3);
+        installRenderers(v);
         resizeRowNumberColumn(v.grid, 3);
         tabs.addTab("Sheet " + book.size(), scrollFor(v));
         tabs.setSelectedIndex(tabs.getTabCount() - 1);
@@ -172,6 +248,7 @@ public class SheetGui {
         int col = v.grid.columnAtPoint(e.getPoint());
         if (row < 0 || col <= 0) return;
         Cell cell = v.sheet.cell(row, col);
+        System.err.println("CELL row=" + row + " col=" + col + " value=" + cell.getValue() + " raw=" + v.sheet.getRawValue(row, col));
         JPopupMenu menu = new JPopupMenu();
         JMenu typeMenu = new JMenu("Convert type");
         for (DataType dt : DataType.values()) {
@@ -190,6 +267,17 @@ public class SheetGui {
         JMenuItem editCell = new JMenuItem("Edit cell content...");
         editCell.addActionListener(ev -> showEditDialog(v, row, col, cell));
         menu.add(editCell);
+        JMenuItem setFormat = new JMenuItem("Set format pattern…");
+        setFormat.addActionListener(ev -> {
+            String pat = JOptionPane.showInputDialog(v.grid,
+                    "Enter Java format pattern (e.g. #,##0.00, yyyy-MM-dd, HH:mm):",
+                    v.sheet.getFormatPattern(row, col) == null ? "" : v.sheet.getFormatPattern(row, col));
+            if (pat != null) {
+                v.sheet.setFormatPattern(row, col, pat);
+                v.grid.repaint();
+            }
+        });
+        menu.add(setFormat);
         JMenuItem clear = new JMenuItem("Clear cell");
         clear.addActionListener(ev -> {
             try {
@@ -213,7 +301,8 @@ public class SheetGui {
         dlg.setVisible(true);
         if (dlg.wasSaved()) {
             v.sheet.saveCell(row, col, dlg.getEditedText(), dlg.getEditedRawExpression(),
-                    dlg.getEditedNode(), dlg.getEditedDataType(), dlg.getEditedReferencedCells());
+                    dlg.getEditedNode(), dlg.getEditedDataType(), dlg.getEditedReferencedCells(),
+                    dlg.getEditedFormatPattern(), dlg.getEditedAlignment());
             recomputeDependentsOnEdit(v, row, col);
         }
     }
@@ -247,6 +336,7 @@ public class SheetGui {
             }
             SheetView v = current();
             v.model.setSheetSize(rows, cols);
+            installRenderers(v);
             resizeRowNumberColumn(v.grid, rows);
             setStatus("Array created: " + rows + "x" + cols + ". Fill in the cells and use get(row,col).");
         } catch (Exception ex) {

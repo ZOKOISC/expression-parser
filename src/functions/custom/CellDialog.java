@@ -21,6 +21,7 @@ import javax.xml.transform.stream.StreamResult;
 import org.w3c.dom.Document;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -57,6 +58,8 @@ public class CellDialog extends JDialog {
     private final JTextField valueField = new JTextField(42);
     private final JTextField dataTypeField = new JTextField(8);
     private final JTextField nodeTypeField = new JTextField(10);
+    private final JTextField formatField = new JTextField(12);
+    private final JComboBox<String> alignmentCombo = new JComboBox<>(new String[]{"Left", "Right", "Center"});
     private final JLabel posLabel = new JLabel(" ");
     private final JLabel typeLabel = new JLabel(" ");
     private final JTextArea exprArea = new JTextArea(12, 55);
@@ -73,6 +76,8 @@ public class CellDialog extends JDialog {
     private int selfCol = -1;
 	private Set<CellRef>  referencedCells;
 	private Node lastNode;
+	private String formatPattern;
+	private String alignment;
 	
     public CellDialog(Frame owner, Cell cell, FunctionRegistry registry, Map<String, Object> bindings) {
         super(owner, "Edit cell value", true);
@@ -122,6 +127,10 @@ public class CellDialog extends JDialog {
         valueRow.add(valueField);
         valueRow.add(new JLabel("DataType:"));
         valueRow.add(dataTypeField);
+        valueRow.add(new JLabel("Format:"));
+        valueRow.add(formatField);
+        valueRow.add(new JLabel("Align:"));
+        valueRow.add(alignmentCombo);
         valueRow.add(new JLabel(" "));
         valueRow.add(nodeTypeField);
 
@@ -159,6 +168,10 @@ public class CellDialog extends JDialog {
             exprArea.setText(rawExpression);
         dataType = cell.getType();
         dataTypeField.setText(dataType.name());
+        formatPattern = cell.getFormatPattern();
+        formatField.setText(formatPattern == null ? "" : formatPattern);
+        String al = cell.getHorizontalAlignment();
+        alignmentCombo.setSelectedItem(al != null ? al : "Left");
         Node saved = cell.getExpression();
 		String nodeClassName = saved == null?"":(" "+saved.getClass().getSimpleName());
  		nodeTypeField.setText((saved != null?"X":"C")+nodeClassName);
@@ -260,6 +273,12 @@ public class CellDialog extends JDialog {
 
     private void doSave() {
         String raw = exprArea.getText();
+        formatPattern = formatField.getText().trim();
+        alignmentCombo.getSelectedItem();
+        this.alignment = alignmentCombo.getSelectedItem() != null ? alignmentCombo.getSelectedItem().toString() : "Left";
+        if (raw == null || raw.trim().isEmpty()) {
+            raw = cell.getRawExpression();
+        }
         if (raw != null && !raw.trim().isEmpty()) {
             try {
                 lastNode = Expression.parse(raw, registry).getOptimized();
@@ -272,7 +291,8 @@ public class CellDialog extends JDialog {
         System.out.println("DOSAVE raw='" + raw + "' lastNode="
                 + (lastNode == null ? "null" : lastNode.getClass().getSimpleName())
                 + " text=" + (lastNode == null ? "" : lastNode.toText())
-                + " refs=" + (lastNode == null ? "null" : lastNode.collectReferenced()));
+                + " refs=" + (lastNode == null ? "null" : lastNode.collectReferenced())
+                + " format=" + formatPattern + " align=" + this.alignment);
 		referencedCells = lastNode == null ? null : lastNode.collectReferenced();
         saved = true;
         dispose();
@@ -296,11 +316,19 @@ public class CellDialog extends JDialog {
 			return null;
         return referencedCells;
     }
-    public Node getEditedNode() {
-        return lastNode;
-    }
+     public Node getEditedNode() {
+         return lastNode;
+     }
 
-    private String nodeXml(Node node) {
+      public String getEditedFormatPattern() {
+          return formatPattern;
+      }
+
+      public String getEditedAlignment() {
+          return alignment;
+      }
+
+      private String nodeXml(Node node) {
         try {
             DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
             Document doc = dbf.newDocumentBuilder().newDocument();

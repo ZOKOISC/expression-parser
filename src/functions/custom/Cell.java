@@ -1,6 +1,7 @@
 package functions.custom;
 
 import java.awt.Color;
+import java.text.DecimalFormat;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -43,6 +44,8 @@ public class Cell {
     private boolean bold;
     private Color background;
     private Color foreground;
+    private String formatPattern;
+    private String horizontalAlignment;
 
     public Cell(DataType type, Object value) {
         this(type, value, null, null, null);
@@ -195,9 +198,43 @@ public class Cell {
         this.foreground = foreground;
     }
 
+    public String getFormatPattern() {
+        return formatPattern;
+    }
+
+    public void setFormatPattern(String formatPattern) {
+        this.formatPattern = formatPattern;
+    }
+
+    public String getHorizontalAlignment() {
+        return horizontalAlignment;
+    }
+
+    public void setHorizontalAlignment(String horizontalAlignment) {
+        this.horizontalAlignment = horizontalAlignment;
+    }
+
     public String display() {
         if (value == null) {
             return "";
+        }
+        if (formatPattern != null && !formatPattern.isEmpty()) {
+            try {
+                if (value instanceof LocalDate d) {
+                    return d.format(DateTimeFormatter.ofPattern(formatPattern));
+                }
+                if (value instanceof LocalDateTime dt) {
+                    return dt.format(DateTimeFormatter.ofPattern(formatPattern));
+                }
+                if (value instanceof LocalTime t) {
+                    return t.format(DateTimeFormatter.ofPattern(formatPattern));
+                }
+                if (value instanceof Number n) {
+                    return new DecimalFormat(formatPattern).format(n);
+                }
+            } catch (Exception ignored) {
+                // pattern not applicable; fall back to default display
+            }
         }
         if (value instanceof LocalDate d) {
             return d.format(DATE_FMT);
@@ -243,42 +280,62 @@ public class Cell {
         if (t.length() >= 2) {
             char q = t.charAt(0);
             if ((q == '\'' || q == '"') && t.charAt(t.length() - 1) == q) {
-                return new Cell(DataType.STRING, t.substring(1, t.length() - 1));
+                Cell c = new Cell(DataType.STRING, t.substring(1, t.length() - 1));
+                c.setRawExpression(s);
+                return c;
             }
         }
         if (t.equalsIgnoreCase("true")) {
-            return new Cell(DataType.BOOLEAN, Boolean.TRUE);
+            Cell c = new Cell(DataType.BOOLEAN, Boolean.TRUE);
+            c.setRawExpression(s);
+            return c;
         }
         if (t.equalsIgnoreCase("false")) {
-            return new Cell(DataType.BOOLEAN, Boolean.FALSE);
+            Cell c = new Cell(DataType.BOOLEAN, Boolean.FALSE);
+            c.setRawExpression(s);
+            return c;
         }
         try {
-            return new Cell(DataType.DATETIME, LocalDateTime.parse(t, DATETIME_FMT));
+            Cell c = new Cell(DataType.DATETIME, LocalDateTime.parse(t, DATETIME_FMT));
+            c.setRawExpression(s);
+            return c;
         } catch (DateTimeParseException ignored) {
             // not a datetime literal
         }
         try {
-            return new Cell(DataType.DATE, LocalDate.parse(t, DATE_FMT));
+            Cell c = new Cell(DataType.DATE, LocalDate.parse(t, DATE_FMT));
+            c.setRawExpression(s);
+            return c;
         } catch (DateTimeParseException ignored) {
             // not a date literal
         }
         try {
-            return new Cell(DataType.TIME, LocalTime.parse(t, TIME_FMT));
+            Cell c = new Cell(DataType.TIME, LocalTime.parse(t, TIME_FMT));
+            c.setRawExpression(s);
+            return c;
         } catch (DateTimeParseException ignored) {
             // not a time literal
         }
         if (t.equals("0")) {
-            return new Cell(DataType.NUMERIC, 0.0);
+            Cell c = new Cell(DataType.NUMERIC, 0.0);
+            c.setRawExpression(s);
+            return c;
         }
         if (t.length() >= 2 && t.charAt(0) == '0' && isAllDigits(t.substring(1))) {
-            return new Cell(DataType.STRING, t);
+            Cell c = new Cell(DataType.STRING, t);
+            c.setRawExpression(s);
+            return c;
         }
         try {
-            return new Cell(DataType.NUMERIC, Double.parseDouble(t));
+            Cell c = new Cell(DataType.NUMERIC, Double.parseDouble(t));
+            c.setRawExpression(s);
+            return c;
         } catch (NumberFormatException ignored) {
             // not a numeric literal
         }
-        return new Cell(DataType.STRING, t);
+        Cell c = new Cell(DataType.STRING, t);
+        c.setRawExpression(s);
+        return c;
     }
 
     private static boolean isAllDigits(String s) {

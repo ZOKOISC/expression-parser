@@ -18,6 +18,8 @@ public class Sheet implements CellProvider {
     private final Map<String, Object> bindings = new LinkedHashMap<>();
     private FunctionRegistry registry;
     private SheetBook book;
+    private final Map<String, String> formatPatterns = new LinkedHashMap<>();
+    private final Map<String, String> alignments = new LinkedHashMap<>();
 
     public Sheet() {
     }
@@ -49,6 +51,32 @@ public class Sheet implements CellProvider {
         return registry;
     }
 
+    public String getFormatPattern(int row, int col) {
+        return formatPatterns.get(cellKey(sheetIndex(), row, col));
+    }
+
+    public void setFormatPattern(int row, int col, String pattern) {
+        String key = cellKey(sheetIndex(), row, col);
+        if (pattern == null || pattern.isEmpty()) {
+            formatPatterns.remove(key);
+        } else {
+            formatPatterns.put(key, pattern);
+        }
+    }
+
+    public String getAlignment(int row, int col) {
+        return alignments.get(cellKey(sheetIndex(), row, col));
+    }
+
+    public void setAlignment(int row, int col, String alignment) {
+        String key = cellKey(sheetIndex(), row, col);
+        if (alignment == null || alignment.isEmpty()) {
+            alignments.remove(key);
+        } else {
+            alignments.put(key, alignment);
+        }
+    }
+
     public Map<String, Object> bindings() {
         return bindings;
     }
@@ -66,6 +94,8 @@ public class Sheet implements CellProvider {
         cells = new String[0][0];
         String prefix = "S" + (sheetIndex() + 1) + "(";
         cellMap.keySet().removeIf(k -> k.startsWith(prefix));
+        formatPatterns.keySet().removeIf(k -> k.startsWith(prefix));
+        alignments.keySet().removeIf(k -> k.startsWith(prefix));
     }
 
     @Override
@@ -110,6 +140,10 @@ public class Sheet implements CellProvider {
         Cell c = cellMap.get(key);
         if (c == null) {
             c = Cell.parse(getRawValue(row, jtableCol));
+            String pat = formatPatterns.get(key);
+            if (pat != null) c.setFormatPattern(pat);
+            String al = alignments.get(key);
+            if (al != null) c.setHorizontalAlignment(al);
             cellMap.put(key, c);
         }
         return c;
@@ -121,7 +155,12 @@ public class Sheet implements CellProvider {
             existing.updateValue(raw);
             return existing;
         }
-        return Cell.parse(raw);
+        Cell c = Cell.parse(raw);
+        String pat = getFormatPattern(row, col);
+        if (pat != null) c.setFormatPattern(pat);
+        String al = getAlignment(row, col);
+        if (al != null) c.setHorizontalAlignment(al);
+        return c;
     }
 
     public void convertCell(int row, int col, DataType dt) {
@@ -142,12 +181,20 @@ public class Sheet implements CellProvider {
     }
 
     public void saveCell(int row, int col, String text, String rawExpression, Node node,
-                         DataType type, Set<CellRef> referenced) {
+                          DataType type, Set<CellRef> referenced, String formatPattern, String alignment) {
         setRawValue(row, col, text == null ? "" : text);
         Cell saved = Cell.parse(text == null ? "" : text);
         saved.setRawExpression(rawExpression);
         saved.setType(type);
         saved.setExpression(node);
+        if (formatPattern != null && !formatPattern.isEmpty()) {
+            saved.setFormatPattern(formatPattern);
+        }
+        if (alignment != null && !alignment.isEmpty()) {
+            saved.setHorizontalAlignment(alignment);
+        }
+        setFormatPattern(row, col, formatPattern);
+        setAlignment(row, col, alignment);
         CellRef selfRef = new CellRef(sheetIndex(), row, col - 1);
         Set<CellRef> normalized = new LinkedHashSet<>();
         if (referenced != null) {
