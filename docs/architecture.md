@@ -3,16 +3,18 @@
 Java desktop spreadsheet / expression-engine application. No external libraries
 (JDK only, Swing for the UI, DOM for XML). The project is split into a pure
 expression engine (`expr`), a function layer (`functions`), domain + grid
-(`functions.custom`) and three entry points in the default package.
+(`functions.custom`) and four entry points in the default package.
 
 ## Package overview
 
 ```
 src/                          default package — application entry points
-  Main.java                   headless test/demo suite; launches SheetGui at the end
-  SheetGui.java               workbook editor (multi-sheet grid GUI)
+  Main.java                   headless test/demo suite; launches BookGui at the end
+  BookGui.java                workbook editor (multi-sheet grid GUI)
   ParserGui.java              expression sandbox GUI (parse / optimise / evaluate)
-  run.bat / sheet.bat / gui.bat / parser.bat   Windows launchers
+  Library.java                the library model: catalog of books + default folder
+  LibraryGui.java             library GUI (edit folder, catalog table, add/open books)
+  run.bat / sheet.bat / gui.bat / parser.bat / library.bat   Windows launchers
 
 src/expr/                     expression engine (no GUI, no custom FunctionRegistry)
   ExpressionParser.java       tokenizer + recursive-descent parser -> AST
@@ -112,12 +114,12 @@ cellKey = new CellRef(sheet, row, col).toString()   ->   "S2(3,4)"
 - **Deleting a sheet closes it** (`Sheet.close()`): its raw grid is cleared and its
   keys are purged from the shared map, but the slot is kept so indices used by other
   sheets stay valid. Lookups on a closed sheet return `null`/empty with a warning.
-- `Gui`/`SheetGui` keep the tabs, `SheetView`s and the book in sync: the tab index ==
+- `Gui`/`BookGui` keep the tabs, `SheetView`s and the book in sync: the tab index ==
   book index, tab N is addressable as `get(N, …)`.
 
 ## GUI layering
 
-- **SheetGui** is view-only: it owns the `JTable`/`JTabbedPane`, the variables text
+- **BookGui** is view-only: it owns the `JTable`/`JTabbedPane`, the variables text
   area, the array-size fields and popup menus, and delegates every sheet operation
   to `Sheet`/`SheetBook`. Editing a grid cell fires `handleCellUpdate` (registry the
   cell) then `recomputeDependentsOnEdit`, which cascades across the whole workbook.
@@ -147,5 +149,6 @@ Each `.bat` refreshes the `PATH`, compiles with
 automatically via `-sourcepath`), then runs the class.
 
 - `run.bat` → `Main` (self-checking demo; passes = summary printed + GUI starts)
-- `sheet.bat`, `gui.bat` → `SheetGui` (workbook editor)
+- `sheet.bat`, `gui.bat` → `BookGui` (workbook editor)
+- `library.bat` → `LibraryGui` (book library)
 - `parser.bat` → `ParserGui` (expression sandbox)

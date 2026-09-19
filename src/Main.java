@@ -2,6 +2,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import javax.swing.SwingUtilities;
@@ -10,6 +11,9 @@ import expr.Delay;
 import expr.EvalUtil;
 import expr.Expression;
 import expr.ExpressionException;
+import expr.ConstantNode;
+import expr.DataType;
+import expr.Node;
 import functions.FunctionRegistry;
 import functions.MathFunctions;
 import functions.Warnings;
@@ -17,7 +21,10 @@ import functions.custom.ArrayGetFunction;
 import functions.custom.ArrayTable;
 import functions.custom.Cell;
 import functions.custom.FactorialFunction;
+import functions.custom.Library;
 import functions.custom.Sheet;
+import functions.custom.SheetBook;
+import functions.custom.WorkbookIO;
 
 public class Main {
 
@@ -298,10 +305,146 @@ public class Main {
                 + EvalUtil.asString(loaded.evaluate(var("x", 4.5))));
 
         System.out.println();
+        System.out.println("=== Workbook XML round-trip ===\n");
+
+        SheetBook wb = new SheetBook();
+        Sheet sheet = wb.add(new Sheet());
+        sheet.install(MathFunctions.createRegistry());
+        sheet.setSize(3, 3);
+        sheet.setBindingsText("x = 4;\nTAXBASE[3,2]={{0,0},{100,0.10},{200,0.25}};");
+        sheet.setRawValue(0, 1, "13");
+        sheet.setRawValue(0, 2, "'hello'");
+        sheet.setRawValue(0, 3, "true");
+        sheet.setRawValue(1, 1, "2024-01-15");
+        sheet.setRawValue(1, 2, "2023-12-25 23:59:59");
+        sheet.setRawValue(1, 3, "14:30:00");
+        sheet.cell(0, 1);
+        sheet.cell(0, 2);
+        sheet.cell(0, 3);
+        sheet.cell(1, 1);
+        sheet.cell(1, 2);
+        sheet.cell(1, 3);
+        FunctionRegistry wbReg = MathFunctions.createRegistry();
+        Node taxNode = Expression.parse("tax(TAXBASE, TAXBASE[2,0] + 50)", wbReg).getOptimized();
+        sheet.saveCell(2, 1, "22.5", "tax(TAXBASE, TAXBASE[2,0] + 50)", taxNode, DataType.NUMERIC,
+                taxNode.collectReferenced(), "#,##0.00", "Right");
+
+        String wbXml = WorkbookIO.toXml(wb, "x = 4;\nTAXBASE[3,2]={{0,0},{100,0.10},{200,0.25}};");
+        System.out.println(wbXml);
+
+WorkbookIO.LoadedWorkbook loadedWb = WorkbookIO.fromXml(wbXml);
+        checkWorkbookCell(loadedWb, 1, 1, "13", "13");
+        checkWorkbookCell(loadedWb, 1, 2, "'hello'", "'hello'");
+        checkWorkbookCell(loadedWb, 1, 3, "true", "true");
+        checkWorkbookCell(loadedWb, 2, 1, "2024-01-15", "2024-01-15");
+        checkWorkbookCell(loadedWb, 2, 2, "2023-12-25 23:59:59", "2023-12-25 23:59:59");
+        checkWorkbookCell(loadedWb, 2, 3, "14:30:00", "14:30:00");
+        checkWorkbookCell(loadedWb, 3, 1, "22.5", "tax(TAXBASE, TAXBASE[2,0] + 50)");
+
+        Sheet restored = wb.add(new Sheet());
+        restored.install(MathFunctions.createRegistry());
+        restored.setSize(loadedWb.sheets.get(0).rows, loadedWb.sheets.get(0).cols);
+        for (WorkbookIO.LoadedCell lc : loadedWb.sheets.get(0).cells) {
+            restored.restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
+                    lc.type, lc.formatPattern, lc.alignment);
+        }
+        restored.setBindingsText(loadedWb.variablesText);
+        restored.recomputeAll();
+        assertCell(restored, 0, 1, "13");
+        assertCell(restored, 0, 2, "hello");
+        assertCell(restored, 0, 3, "true");
+        assertCell(restored, 1, 1, "2024-01-15");
+        assertCell(restored, 1, 2, "2023-12-25 23:59:59");
+        assertCell(restored, 1, 3, "14:30:00");
+        assertType(restored, 1, 1, "DATE");
+        assertType(restored, 1, 2, "DATETIME");
+        assertType(restored, 1, 3, "TIME");
+        Object restoredValue = restored.cell(2, 1).getValue();
+        boolean valueOk = restoredValue instanceof Double d && d.doubleValue() == 22.5;
+        System.out.printf("%-3s %-40s (value=%s)%n", valueOk ? "OK " : "FAIL",
+                "restored (3,1) numeric value", restoredValue);
+        if (!valueOk) {
+            throw new AssertionError("Restored cell (3,1) value was " + restoredValue + " but expected 22.5");
+        }
+        System.out.println("Restored cell (3,1) type=" + restored.cell(2, 1).getType().name()
+                + " format=" + restored.cell(2, 1).getFormatPattern()
+                + " align=" + restored.cell(2, 1).getHorizontalAlignment());
+
+        System.out.println();
+        System.out.println("=== Library XML round-trip ===\n");
+
+        Library lib = new Library();
+        RuntimeException libFailure = new RuntimeException("Library round-trip failed.");
+        Library.Book one = lib.createBook("Accounts");
+        Library.Book two = lib.createBook("Budget");
+        if (one.id == two.id) {
+            throw libFailure;
+        }
+        String libXml = lib.toXml();
+        System.out.println(libXml);
+        Library reloadedLib = Library.fromXml(libXml);
+        if (reloadedLib.books().size() != 2) {
+            throw libFailure;
+        }
+        if (!reloadedLib.getById(one.id).name.equals("Accounts") ||
+                !reloadedLib.getById(two.id).name.equals("Budget")) {
+            throw libFailure;
+        }
+        System.out.printf("%-3s %-40s%n", "OK ", "library catalog round-trip (ids " + one.id + ", " + two.id + ")");
+
+        System.out.println();
+        System.out.println("=== Resize keeps in-bounds cells (Sheet) ===\n");
+
+        Sheet rs = new Sheet();
+        rs.setSize(3, 3);
+        rs.setRawValue(1, 1, "keep-a");
+        rs.setRawValue(1, 3, "keep-b");
+        rs.setRawValue(2, 3, "keep-c");
+
+        // Growing keeps every existing cell.
+        rs.setSize(5, 5);
+        checkRaw(rs, 1, 1, "keep-a", "grow keeps (1,1)");
+        checkRaw(rs, 1, 3, "keep-b", "grow keeps (1,3)");
+        checkRaw(rs, 2, 3, "keep-c", "grow keeps (2,3)");
+        checkInt(rs.rows(), 5, "grow rows=5");
+        checkInt(rs.cols(), 5, "grow cols=5");
+
+        // Forecast before shrinking: only the two out-of-new-bounds cells count.
+        checkInt(rs.lostCellsIfResizedTo(4, 4), 0, "forecast(4,4)=0 (nothing lost)");
+        checkInt(rs.lostCellsIfResizedTo(2, 2), 2, "forecast(2,2)=2 (both far cells lost)");
+
+        // Shrinking keeps in-bounds, drops the rest, and never throws AIOOBE.
+        rs.setSize(2, 2);
+        checkRaw(rs, 1, 1, "keep-a", "shrink keeps (1,1)");
+        checkRaw(rs, 1, 2, "",       "shrink (1,2) never set (stays empty)");
+        checkRaw(rs, 1, 3, "",       "shrink drops (1,3)");
+        checkRaw(rs, 2, 3, "",       "shrink drops (2,3)");
+        checkInt(rs.rows(), 2, "shrink rows=2");
+        checkInt(rs.cols(), 2, "shrink cols=2");
+
+        System.out.println();
         System.out.println("All checks passed.");
 
         System.out.println("Launching GUI...");
-        SwingUtilities.invokeLater(SheetGui::new);
+        SwingUtilities.invokeLater(BookGui::new);
+    }
+
+    private static void checkRaw(Sheet sheet, int row, int col, String expected, String label) {
+        String actual = sheet.getRawValue(row, col);
+        boolean ok = expected.equals(actual);
+        System.out.printf("%-3s %-38s (got=%s)%n", ok ? "OK " : "FAIL", label,
+                actual.isEmpty() ? "<empty>" : actual);
+        if (!ok) {
+            throw new AssertionError(label + " expected '" + expected + "' but got '" + actual + "'");
+        }
+    }
+
+    private static void checkInt(int actual, int expected, String label) {
+        boolean ok = actual == expected;
+        System.out.printf("%-3s %-38s (got=%d)%n", ok ? "OK " : "FAIL", label, actual);
+        if (!ok) {
+            throw new AssertionError(label + " expected " + expected + " but got " + actual);
+        }
     }
 
     private static void check(String expr, Map<String, Object> bindings, Object expected) {
@@ -385,5 +528,52 @@ public class Main {
             m.put((String) kv[i], kv[i + 1]);
         }
         return m;
+    }
+
+    private static void checkWorkbookCell(WorkbookIO.LoadedWorkbook loaded, int row, int col,
+                                          String text, String raw) {
+        List<WorkbookIO.LoadedCell> cells = loaded.sheets.get(0).cells;
+        WorkbookIO.LoadedCell hit = null;
+        for (WorkbookIO.LoadedCell c : cells) {
+            if (c.row == row - 1 && c.col == col - 1) {
+                hit = c;
+                break;
+            }
+        }
+        if (hit == null) {
+            throw new AssertionError("Loaded workbook has no cell (" + row + "," + col + ")");
+        }
+        boolean ok = text.equals(hit.text) && raw.equals(hit.rawExpression);
+        System.out.printf("%-3s %-40s (loaded text=%s raw=%s)%n", ok ? "OK " : "FAIL",
+                "cell (" + row + "," + col + ")", hit.text, hit.rawExpression);
+        if (!ok) {
+            throw new AssertionError("Cell (" + row + "," + col + ") loaded as text='"
+                    + hit.text + "' raw='" + hit.rawExpression + "' but expected text='" + text
+                    + "' raw='" + raw + "'");
+        }
+    }
+
+    private static void assertCell(Sheet sheet, int row, int col, String expectedDisplay) {
+        Cell cell = sheet.cell(row, col);
+        String actual = cell.display();
+        boolean ok = expectedDisplay.equals(actual);
+        System.out.printf("%-3s %-40s (actual display=%s)%n", ok ? "OK " : "FAIL",
+                "restored (" + (row + 1) + "," + (col + 1) + ")", actual);
+        if (!ok) {
+            throw new AssertionError("Restored cell (" + (row + 1) + "," + (col + 1)
+                    + ") displays '" + actual + "' but expected '" + expectedDisplay + "'");
+        }
+    }
+
+    private static void assertType(Sheet sheet, int row, int col, String expectedType) {
+        Cell cell = sheet.cell(row, col);
+        String actual = cell.getType().name();
+        boolean ok = expectedType.equals(actual);
+        System.out.printf("%-3s %-40s (actual type=%s)%n", ok ? "OK " : "FAIL",
+                "restored (" + (row + 1) + "," + (col + 1) + ") type", actual);
+        if (!ok) {
+            throw new AssertionError("Restored cell (" + (row + 1) + "," + (col + 1)
+                    + ") type is " + actual + " but expected " + expectedType);
+        }
     }
 }

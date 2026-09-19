@@ -1,7 +1,7 @@
 # User's Guide
 
 This project is a small desktop spreadsheet with its own expression language. It
-ships three programs plus a self-test.
+ships four programs plus a self-test.
 
 ## Running
 
@@ -9,7 +9,8 @@ Double-click a batch file in the project folder (PATH is refreshed automatically
 
 | Launcher | Program | Purpose |
 |---|---|---|
-| `sheet.bat` (or `gui.bat`) | **SheetGui** | the spreadsheet: grid of sheets |
+| `sheet.bat` (or `gui.bat`) | **BookGui** | the spreadsheet: grid of sheets |
+| `library.bat` | **LibraryGui** | catalog of books + editable default folder |
 | `parser.bat` | **ParserGui** | try out expressions or functions without a grid |
 | `run.bat` | **Main** | headless self-checking demo of the engine |
 
@@ -18,7 +19,7 @@ Everything compiles into `out/`. If the JVM crashes, the error is written to
 
 ---
 
-## SheetGui — the spreadsheet
+## BookGui — the spreadsheet
 
 Layout, top to bottom:
 
@@ -34,7 +35,7 @@ Layout, top to bottom:
    `a[1,1]` is `0.10` for the array above. The declared dimensions must match the
    literal row and column counts.
 2. **Array dimensions** (`rows`, `columns`) + **Create array**, **Create sheet**,
-   **Delete sheet**, and a cell-type readout.
+   **Delete sheet**, **Save XML**, **Open XML**, and a cell-type readout.
 3. **Tab pages** — one page per sheet (`Sheet 1`, `Sheet 2`, …). The first column
    in a grid is the row-number header; data cells are 1-based.
 
@@ -46,6 +47,16 @@ Layout, top to bottom:
   return `null` with a warning (sheet indices are not reused).
 - A sheet is addressed in formulas by its tab number, 1-based: `get(2, 1, 1)`
   reads sheet 2, row 1, column 1.
+
+### Saving and opening (XML)
+
+**Save XML** writes the entire workbook — the Variables box text, every sheet's
+size, and each non-empty cell (its displayed value, raw expression text for
+formulas, datatype, format pattern and alignment) — to an XML file. **Open XML**
+clears the workbook and restores a saved file; formulas are re-parsed and every
+dependent cell is recomputed, so a restored workbook behaves exactly like the
+saved one. Both actions are also available from the **File** menu, with keyboard
+shortcuts **Ctrl+S** (save) and **Ctrl+O** (open).
 
 ### Entering data
 

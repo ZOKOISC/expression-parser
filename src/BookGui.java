@@ -3,8 +3,13 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Frame;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.text.DecimalFormat;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -15,9 +20,11 @@ import java.util.List;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JMenu;
+import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -25,6 +32,7 @@ import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTable;
+import javax.swing.KeyStroke;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
@@ -40,8 +48,10 @@ import functions.custom.Cell;
 import functions.custom.CellDialog;
 import functions.custom.Sheet;
 import functions.custom.SheetBook;
+import functions.custom.WorkbookIO;
+import functions.custom.Library;
 
-public class SheetGui {
+public class BookGui {
 
     private static class SheetView {
         final Sheet sheet = new Sheet();
@@ -54,15 +64,42 @@ public class SheetGui {
     private final JTextField rowsField = new JTextField("3", 3);
     private final JTextField colsField = new JTextField("3", 3);
     private final List<SheetView> sheets = new ArrayList<>();
-    private final SheetBook book = new SheetBook();
+    private SheetBook book = new SheetBook();
     private final JTabbedPane tabs = new JTabbedPane();
     private final JLabel typeLabel = new JLabel(" ");
+    private JFrame frame;
+    /** Folder the current workbook was loaded from (save dialog starts here). */
+    private File currentDir;
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(SheetGui::new);
+        SwingUtilities.invokeLater(BookGui::new);
     }
 
-    public SheetGui() {
+    public BookGui() {
+        this(null, true);
+    }
+
+    /**
+     * Builds the editor. If {@code openFile} is given the workbook is loaded
+     * from it at startup; {@code exitOnClose} is false when the window is
+     * embedded in the library so closing it does not exit the JVM.
+     */
+    public BookGui(File openFile, boolean exitOnClose) {
+        buildUi();
+        if (exitOnClose) {
+            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        } else {
+            frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+        }
+        if (openFile != null && openFile.exists()) {
+            loadWorkbook(openFile.toPath());
+        } else {
+            Path remembered = Library.rememberedLibraryFolder();
+            currentDir = remembered != null ? remembered.toFile() : null;
+        }
+    }
+
+    private void buildUi() {
         Font mono = new Font(Font.MONOSPACED, Font.PLAIN, 13);
 
         varsArea.setFont(mono);
@@ -72,7 +109,7 @@ public class SheetGui {
         first.model.setSheetSize(3, 3);
         installRenderers(first);
         first.sheet.loadDefaults();
-        tabs.addTab("Sheet " + book.size(), scrollFor(first));
+        tabs.addTab("Sheet " + (book.size()), scrollFor(first));
         resizeRowNumberColumn(first.grid, 3);
 
         JPanel varsPanel = new JPanel(new BorderLayout());
@@ -82,23 +119,57 @@ public class SheetGui {
         varsPanel.add(varsScroll, BorderLayout.CENTER);
 
         JPanel arrayControls = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
-        arrayControls.add(new JLabel("Array dimensions: rows"));
+        arrayControls.add(new JLabel("Grid size: rows"));
         rowsField.setFont(mono);
         colsField.setFont(mono);
         arrayControls.add(rowsField);
         arrayControls.add(new JLabel("columns"));
         arrayControls.add(colsField);
-        JButton btnCreate = new JButton("Create array");
+        JButton btnCreate = new JButton("Resize Grid");
+        JButton btnSave = new JButton("Save XML");
+        JButton btnOpen = new JButton("Open XML");
         arrayControls.add(btnCreate);
         JButton btnCreateSheet = new JButton("Create sheet");
         JButton btnDeleteSheet = new JButton("Delete sheet");
         arrayControls.add(btnCreateSheet);
         arrayControls.add(btnDeleteSheet);
+        arrayControls.add(btnSave);
+        arrayControls.add(btnOpen);
         typeLabel.setFont(mono);
         arrayControls.add(typeLabel);
 
+        JMenuBar menuBar = new JMenuBar();
+        JMenu fileMenu = new JMenu("File");
+        JMenuItem itemSave = new JMenuItem("Save XML");
+        JMenuItem itemOpen = new JMenuItem("Open XML");
+        itemSave.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK));
+        itemOpen.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_DOWN_MASK));
+        fileMenu.add(itemSave);
+        fileMenu.add(itemOpen);
+        menuBar.add(fileMenu);
+        itemSave.addActionListener(e -> doSaveXml());
+        itemOpen.addActionListener(e -> doOpenXml());
+
+        // Right-clicking the sheet name on a tab renames that sheet. The
+        // clicked tab is selected first so doRenameSheet() targets it.
+        tabs.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.getButton() != MouseEvent.BUTTON3) {
+                    return;
+                }
+                int index = tabs.indexAtLocation(e.getX(), e.getY());
+                if (index < 0) {
+                    return;
+                }
+                tabs.setSelectedIndex(index);
+                doRenameSheet();
+            }
+        });
+
         JFrame frame = new JFrame("Sheet GUI");
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        this.frame = frame;
+        frame.setJMenuBar(menuBar);
         frame.setLayout(new BorderLayout());
         JPanel north = new JPanel(new BorderLayout());
         north.add(varsPanel, BorderLayout.CENTER);
@@ -113,6 +184,8 @@ public class SheetGui {
         btnCreate.addActionListener(e -> doCreateArray());
         btnCreateSheet.addActionListener(e -> doCreateSheet());
         btnDeleteSheet.addActionListener(e -> doDeleteSheet());
+        btnSave.addActionListener(e -> doSaveXml());
+        btnOpen.addActionListener(e -> doOpenXml());
     }
 
     private SheetView createSheetView() {
@@ -225,9 +298,9 @@ public class SheetGui {
         v.model.setSheetSize(3, 3);
         installRenderers(v);
         resizeRowNumberColumn(v.grid, 3);
-        tabs.addTab("Sheet " + book.size(), scrollFor(v));
+        tabs.addTab(v.sheet.name(), scrollFor(v));
         tabs.setSelectedIndex(tabs.getTabCount() - 1);
-        setStatus("Sheet created: Sheet " + book.size());
+        setStatus("Sheet created: " + v.sheet.name());
     }
 
     private void doDeleteSheet() {
@@ -240,6 +313,21 @@ public class SheetGui {
         sheets.remove(idx);
         book.remove(idx);
         setStatus("Sheet deleted.");
+    }
+
+    private void doRenameSheet() {
+        SheetView v = current();
+        if (v == null) {
+            return;
+        }
+        String newName = JOptionPane.showInputDialog(frame, "Sheet name:", v.sheet.name());
+        if (newName == null || newName.trim().isEmpty()) {
+            return;
+        }
+        v.sheet.setName(newName.trim());
+        int index = tabs.getSelectedIndex();
+        tabs.setTitleAt(index, v.sheet.name());
+        setStatus("Sheet renamed: " + v.sheet.name());
     }
 
     private void showCellMenu(MouseEvent e) {
@@ -339,10 +427,25 @@ public class SheetGui {
                 throw new IllegalArgumentException("Rows and columns must be between 1 and 100.");
             }
             SheetView v = current();
-            v.model.setSheetSize(rows, cols);
+                        SheetView v0 = v;
+            int lost = v0.sheet.lostCellsIfResizedTo(rows, cols);
+            if (lost > 0) {
+                int choice = JOptionPane.showConfirmDialog(
+                        frame,
+                        "Resizing the grid to " + rows + " rows x " + cols + " columns would discard " + lost
+                                + " cell" + (lost == 1 ? "" : "s") + " that lie outside the new bounds.\n\n"
+                                + "Resize anyway?",
+                        "Resize grid - discarding used cells", JOptionPane.YES_NO_OPTION);
+                if (choice != JOptionPane.YES_OPTION) {
+                    setStatus("Resize cancelled - the grid still has " + v0.sheet.rows() + " x "
+                            + v0.sheet.cols() + " cells.");
+                    return;
+                }
+            }
+            v0.model.setSheetSize(rows, cols);
             installRenderers(v);
             resizeRowNumberColumn(v.grid, rows);
-            setStatus("Array created: " + rows + "x" + cols + ". Fill in the cells and use get(row,col).");
+            setStatus("Grid resized: " + rows + "x" + cols + ". Fill the cells and use get(row,col).");
         } catch (Exception ex) {
             showError(ex);
         }
@@ -355,5 +458,70 @@ public class SheetGui {
 
     private void setStatus(String text) {
         status.setText(text);
+    }
+
+    private void doSaveXml() {
+        JFileChooser fc = new JFileChooser();
+        if (currentDir != null) {
+            fc.setCurrentDirectory(currentDir);
+        }
+        if (fc.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        try {
+            String xml = WorkbookIO.toXml(book, varsArea.getText());
+            Files.writeString(fc.getSelectedFile().toPath(), xml);
+            setStatus("Workbook saved to " + fc.getSelectedFile().getName());
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    private void doOpenXml() {
+        JFileChooser fc = new JFileChooser();
+        if (currentDir != null) {
+            fc.setCurrentDirectory(currentDir);
+        }
+        if (fc.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        loadWorkbook(fc.getSelectedFile().toPath());
+    }
+
+    private void loadWorkbook(Path file) {
+        try {
+            WorkbookIO.LoadedWorkbook loaded = WorkbookIO.fromXml(Files.readString(file));
+            currentDir = file.getParent() != null ? file.getParent().toFile() : null;
+            tabs.removeAll();
+            for (SheetView sv : new ArrayList<>(sheets)) {
+                book.remove(book.indexOf(sv.sheet));
+            }
+            sheets.clear();
+            book = new SheetBook();
+            varsArea.setText(loaded.variablesText);
+            for (WorkbookIO.LoadedSheet ls : loaded.sheets) {
+                SheetView v = createSheetView();
+                v.sheet.setName(ls.name);
+                v.model.setSheetSize(ls.rows, ls.cols);
+                installRenderers(v);
+                resizeRowNumberColumn(v.grid, ls.rows);
+                tabs.addTab(v.sheet.name(), scrollFor(v));
+                for (WorkbookIO.LoadedCell lc : ls.cells) {
+                    v.sheet.restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
+                            lc.type, lc.formatPattern, lc.alignment);
+                }
+            }
+            for (SheetView v : sheets) {
+                v.sheet.setBindingsText(varsArea.getText());
+                v.sheet.recomputeAll();
+                v.grid.repaint();
+            }
+            if (!sheets.isEmpty()) {
+                tabs.setSelectedIndex(0);
+            }
+            setStatus("Workbook loaded from " + file.getFileName());
+        } catch (Exception ex) {
+            showError(ex);
+        }
     }
 }

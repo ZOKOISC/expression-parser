@@ -57,10 +57,7 @@ public class Cell {
         this.value = base.getValue();
         this.textValue = rawText;
         this.rawExpression = rawText;
-        Object v = base.getValue();
-        Object cv = (v instanceof Number || v instanceof Boolean || v instanceof String)
-                ? v : base.display();
-        this.expression = new ConstantNode(cv);
+        this.expression = constantFor(value);
     }
 
     public Cell(DataType type, Object value, Node expression, String textValue, String rawExpression) {
@@ -99,18 +96,19 @@ public class Cell {
         this.value = parsed.getValue();
         this.textValue = rawText;
         this.rawExpression = rawText;
-        Object v = parsed.getValue();
-        Object cv = (v instanceof Number || v instanceof Boolean || v instanceof String)
-                ? v : parsed.display();
-        this.expression = new ConstantNode(cv);
+        this.expression = constantFor(value);
         this.referenced = null;
     }
 	
     public ConstantNode constantNode() {
-        Object v = value;
-        Object cv = (v instanceof Number || v instanceof Boolean || v instanceof String)
-                ? v : display();
-        return new ConstantNode(cv);
+        return constantFor(value);
+    }
+	
+    private static ConstantNode constantFor(Object v) {
+        if (v instanceof Number || v instanceof Boolean || v instanceof String) {
+            return new ConstantNode(v);
+        }
+        return null;
     }
 	
     public DataType getType() {

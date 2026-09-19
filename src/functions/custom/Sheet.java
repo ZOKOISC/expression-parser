@@ -7,9 +7,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Set;
 
 import expr.CellRef;
+import expr.ConstantNode;
 import expr.DataType;
+import expr.Expression;
 import expr.Node;
 import functions.FunctionRegistry;
 
@@ -22,6 +25,8 @@ public class Sheet implements CellProvider {
     private SheetBook book;
     private final Map<String, String> formatPatterns = new LinkedHashMap<>();
     private final Map<String, String> alignments = new LinkedHashMap<>();
+    private String name = "";
+    private final Set<String> injectedSheetNameBindings = new LinkedHashSet<>();
 
     public Sheet() {
     }
@@ -38,6 +43,17 @@ public class Sheet implements CellProvider {
 
     public int sheetIndex() {
         return book == null ? 0 : book.indexOf(this);
+    }
+
+    public String name() {
+        return name == null || name.isEmpty() ? "Sheet " + (sheetIndex() + 1) : name;
+    }
+
+    public void setName(String name) {
+        this.name = name == null ? "" : name.trim();
+        if (book != null) {
+            book.refreshAllSheetNameBindings();
+        }
     }
 
     private String cellKey(int sheet, int row, int jtableCol) {
@@ -86,10 +102,103 @@ public class Sheet implements CellProvider {
     public void setBindingsText(String text) {
         bindings.clear();
         bindings.putAll(parseBindings(text));
+        refreshSheetNameBindings();
+    }
+
+    /**
+     * Injects the workbook's sheet names as bindings mapping each name to its
+     * 1-based slot id, so expressions can reference a sheet by name, e.g.
+     * {@code get(Budget, 1, 4)}. The sheet-name binding wins over a user
+     * variable of the same name (it is added last). Injected keys are tracked
+     * so renames and removals never leave a stale name -> slot entry behind.
+     */
+    public void refreshSheetNameBindings() {
+        for (String key : injectedSheetNameBindings) {
+            bindings.remove(key);
+        }
+        injectedSheetNameBindings.clear();
+        if (book == null) {
+            return;
+        }
+        for (int slot = 1; slot <= book.maxSlot(); slot++) {
+            Sheet candidate = book.get(slot - 1);
+            if (candidate == null) {
+                continue;
+            }
+            String sheetName = candidate.name();
+            if (sheetName == null || sheetName.isEmpty()) {
+                continue;
+            }
+            bindings.put(sheetName, (double) slot);
+            injectedSheetNameBindings.add(sheetName);
+        }
     }
 
     public void setSize(int rows, int cols) {
-        cells = new String[rows][cols];
+        cells = keepGrid(rows, cols);
+        pruneOutOfRange(rows, cols);
+    }
+
+    /** Builds a new cell grid of the given size, copying the overlapping content. */
+    private String[][] keepGrid(int rows, int cols) {
+        String[][] next = new String[rows][cols];
+        for (int r = 0; r < Math.min(rows, cells.length); r++) {
+            String[] src = cells[r];
+            if (src == null) {
+                continue;
+            }
+            for (int c = 0; c < Math.min(cols, src.length); c++) {
+                next[r][c] = src[c];
+            }
+        }
+        return next;
+    }
+
+    /**
+     * Number of non-empty cells that would be discarded by a resize to the given
+     * grid (cells whose coordinates lie strictly outside the new bounds).
+     */
+    public int lostCellsIfResizedTo(int rows, int cols) {
+        int lost = 0;
+        for (int r = 0; r < cells.length; r++) {
+            String[] src = cells[r];
+            if (src == null) {
+                continue;
+            }
+            for (int c = 0; c < src.length; c++) {
+                if ((r >= rows || c >= cols) && isNonBlank(src[c])) {
+                    lost++;
+                }
+            }
+        }
+        return lost;
+    }
+
+    private static boolean isNonBlank(String s) {
+        return s != null && !s.trim().isEmpty();
+    }
+
+    /** Drops stored per-cell metadata for cells that no longer fit the given bounds. */
+    private void pruneOutOfRange(int rows, int cols) {
+        formatPatterns.keySet().removeIf(k -> !inside(k, rows, cols));
+        alignments.keySet().removeIf(k -> !inside(k, rows, cols));
+    }
+
+    /** Whether a stored cell key "S#(r,c)" still fits inside rows x cols (1-based r,c). */
+    private boolean inside(String cellKey, int rows, int cols) {
+        try {
+            int open = cellKey.lastIndexOf('(');
+            int comma = cellKey.indexOf(',', open);
+            int close = cellKey.indexOf(')', comma);
+            if (open < 0 || comma < 0 || close < 0) {
+                return true; // not a cell-shaped key; keep it
+            }
+            int r = Integer.parseInt(cellKey.substring(open + 1, comma).trim());
+            int c = Integer.parseInt(cellKey.substring(comma + 1, close).trim());
+            return r <= rows && c <= cols;
+        } catch (Exception any) {
+            return true; // unparseable key: never drop data silently
+        }
     }
 
     public void close() {
@@ -122,14 +231,19 @@ public class Sheet implements CellProvider {
     }
 
     public String getRawValue(int row, int col) {
-        if (col == 0 || row < 0 || row >= cells.length) return "";
-        String s = cells[row][col - 1];
+        if (col <= 0 || row < 0 || row >= cells.length) return "";
+        String[] src = cells[row];
+        if (src == null || col - 1 >= src.length) return "";
+        String s = src[col - 1];
         return s == null ? "" : s;
     }
 
     public void setRawValue(int row, int col, String value) {
         if (col > 0 && row >= 0 && row < cells.length) {
-            cells[row][col - 1] = String.valueOf(value).trim();
+            String[] src = cells[row];
+            if (src != null && col - 1 < src.length) {
+                src[col - 1] = String.valueOf(value).trim();
+            }
         }
     }
 
@@ -242,6 +356,47 @@ public class Sheet implements CellProvider {
     public void recomputeDependentsOnEdit(int row, int col) {
         CellRef self = new CellRef(sheetIndex(), row, col - 1);
         recomputeDependents(self, bindings, registry);
+    }
+
+    /**
+     * Restores one cell from a saved workbook (grid text, raw expression source,
+     * datatype, format pattern, alignment). Literal cells (raw text identical to
+     * the displayed text) are rebuilt as constants; anything else is re-parsed
+     * with this sheet's registry so formulas survive the round-trip.
+     */
+    public void restoreCell(int row, int col, String text, String rawExpression,
+                            DataType type, String formatPattern, String alignment) {
+        String raw = rawExpression == null ? "" : rawExpression.trim();
+        String value = text == null ? "" : text.trim();
+        Node node;
+        Set<CellRef> refs = null;
+        if (!raw.isEmpty() && !raw.equals(value)) {
+            try {
+                Expression e = Expression.parse(raw, registry);
+                node = e.getOptimized();
+                refs = node.collectReferenced();
+            } catch (Exception ex) {
+                node = null;
+            }
+        } else {
+            node = null;
+        }
+        if (node == null) {
+            node = Cell.parse(value).constantNode();
+        }
+        saveCell(row, col, value, raw, node, type, refs, formatPattern, alignment);
+    }
+
+    /** Recomputes every registered cell that carries an expression tree. */
+    public void recomputeAll() {
+        for (int r = 0; r < rows(); r++) {
+            for (int c = 1; c <= cols(); c++) {
+                Cell cell = registeredCell(r, c);
+                if (cell != null && cell.getExpression() != null) {
+                    recomputeDependentsOnEdit(r, c);
+                }
+            }
+        }
     }
 
     private void recomputeDependents(CellRef self, Map<String, Object> bindings, FunctionRegistry registry) {
