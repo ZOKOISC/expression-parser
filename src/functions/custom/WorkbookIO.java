@@ -102,6 +102,10 @@ public final class WorkbookIO {
          * workbook can be restored without recalculating anything.
          */
         public boolean fullyStored = true;
+        /** Saved sheet (tab) order as 0-based positions into {@link #sheets}. */
+        public final List<Integer> visualOrder = new ArrayList<>();
+        /** Saved active tab position (0-based), or -1 when none was saved. */
+        public int activeSheet = -1;
 
         public LoadedWorkbook(String variablesText) {
             this.variablesText = variablesText;
@@ -111,7 +115,19 @@ public final class WorkbookIO {
     private WorkbookIO() {
     }
 
+    /** Serializes the workbook without a saved tab order or active tab. */
     public static String toXml(SheetBook book, String variablesText) {
+        return toXml(book, variablesText, null, -1);
+    }
+
+    /**
+     * Serializes the workbook. {@code visualOrder} lists the 0-based sheet
+     * positions in the order their tabs are shown and {@code activeTab} is the
+     * selected tab position (or -1); both are written to the presentation section
+     * and are only needed to reopen the Book GUI exactly as it was arranged.
+     */
+    public static String toXml(SheetBook book, String variablesText,
+                               List<Integer> visualOrder, int activeTab) {
         try {
             DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
             DocumentBuilder db = dbf.newDocumentBuilder();
@@ -120,50 +136,79 @@ public final class WorkbookIO {
             Element root = doc.createElement("workbook");
             doc.appendChild(root);
 
+            // Section 1 - calculation: only what is needed to evaluate and
+            // recalculate the sheets (variables, names and per-cell state).
+            Element calcEl = doc.createElement("calculation");
+            root.appendChild(calcEl);
             Element vars = doc.createElement("variables");
             vars.setTextContent(variablesText == null ? "" : variablesText);
-            root.appendChild(vars);
+            calcEl.appendChild(vars);
+            Element calcSheetsEl = doc.createElement("sheets");
+            calcEl.appendChild(calcSheetsEl);
 
-            Element sheetsEl = doc.createElement("sheets");
-            root.appendChild(sheetsEl);
+            // Section 2 - presentation: display text, format pattern, alignment,
+            // plus the sheet (tab) order and active tab for the Book GUI.
+            Element presEl = doc.createElement("presentation");
+            if (visualOrder != null && !visualOrder.isEmpty()) {
+                StringBuilder order = new StringBuilder();
+                for (Integer idx : visualOrder) {
+                    if (idx == null) {
+                        continue;
+                    }
+                    if (order.length() > 0) {
+                        order.append(';');
+                    }
+                    order.append(idx + 1);          // 1-based sheet position
+                }
+                if (order.length() > 0) {
+                    presEl.setAttribute("order", order.toString());
+                }
+            }
+            if (activeTab >= 0) {
+                presEl.setAttribute("active", String.valueOf(activeTab + 1));   // 1-based tab
+            }
+            root.appendChild(presEl);
+            Element presSheetsEl = doc.createElement("sheets");
+            presEl.appendChild(presSheetsEl);
+
             for (int s = 0; s < book.size(); s++) {
                 Sheet sheet = book.get(s);
+                String sheetName = sheet.name();
                 Element sheetEl = doc.createElement("sheet");
                 sheetEl.setAttribute("rows", String.valueOf(sheet.rows()));
                 sheetEl.setAttribute("cols", String.valueOf(sheet.cols()));
-                String sheetName = sheet.name();
                 if (sheetName != null && !sheetName.isEmpty()) {
                     sheetEl.setAttribute("name", sheetName);
                 }
+                Element calcCellsEl = doc.createElement("cells");
+                sheetEl.appendChild(calcCellsEl);
+
+                Element presSheetEl = doc.createElement("sheet");
+                if (sheetName != null && !sheetName.isEmpty()) {
+                    presSheetEl.setAttribute("name", sheetName);
+                }
+                Element presCellsEl = doc.createElement("cells");
+                presSheetEl.appendChild(presCellsEl);
+
                 for (int r = 0; r < sheet.rows(); r++) {
                     for (int c = 1; c <= sheet.cols(); c++) {
                         String gridText = sheet.getRawValue(r, c);
                         Cell cell = sheet.registeredCell(r, c);
                         String rawExpr = cell == null ? null : cell.getRawExpression();
-                        if ((gridText == null || gridText.trim().isEmpty())
-                                && (rawExpr == null || rawExpr.trim().isEmpty())) {
-                            continue;
-                        }
-                        Element cellEl = doc.createElement("cell");
-                        cellEl.setAttribute("row", String.valueOf(r + 1));
-                        cellEl.setAttribute("col", String.valueOf(c));
-                        cellEl.setAttribute("text", gridText == null ? "" : gridText);
-                        cellEl.setAttribute("raw", rawExpr == null ? gridText : rawExpr);
-                        cellEl.setAttribute("type", cell == null ? Cell.parse(gridText).getType().name()
-                                : cell.getType().name());
+                        String raw = rawExpr == null ? gridText : rawExpr;
+                        boolean hasExpression = cell != null && cell.getExpression() != null;
                         String format = sheet.getFormatPattern(r, c);
-                        if (format != null && !format.isEmpty()) {
-                            cellEl.setAttribute("format", format);
-                        }
                         String alignment = sheet.getAlignment(r, c);
-                        if (alignment != null && !alignment.isEmpty()) {
-                            cellEl.setAttribute("align", alignment);
-                        }
-                        // Concise internal state so a reload does not recalculate:
-                        // the optimized expression tree plus the referenced set and
-                        // the ordered list of cells to recalculate on a change.
-                        if (cell != null) {
-                            if (cell.getExpression() != null) {
+                        if ((raw != null && !raw.trim().isEmpty()) || hasExpression) {
+                            Element cellEl = doc.createElement("cell");
+                            cellEl.setAttribute("row", String.valueOf(r + 1));
+                            cellEl.setAttribute("col", String.valueOf(c));
+                            cellEl.setAttribute("raw", raw == null ? "" : raw);
+                            cellEl.setAttribute("type", cell == null ? Cell.parse(gridText).getType().name()
+                                    : cell.getType().name());
+                            // The optimized tree, computed value, error, referenced
+                            // set and ordered recalculation list.
+                            if (hasExpression) {
                                 cellEl.setAttribute("value", Cell.encodeValue(cell.getValue()));
                                 if (cell.getErrorMessage() != null && !cell.getErrorMessage().isEmpty()) {
                                     cellEl.setAttribute("error", cell.getErrorMessage());
@@ -172,16 +217,33 @@ public final class WorkbookIO {
                                 exprEl.appendChild(cell.getExpression().toXml(doc));
                                 cellEl.appendChild(exprEl);
                             }
-                            String refs = joinRefs(cell.getReferenced());
-                            if (!refs.isEmpty()) {
-                                cellEl.setAttribute("refs", refs);
+                            if (cell != null) {
+                                String refs = joinRefs(cell.getReferenced());
+                                if (!refs.isEmpty()) {
+                                    cellEl.setAttribute("refs", refs);
+                                }
+                                String deps = joinRefs(cell.getDependents());
+                                if (!deps.isEmpty()) {
+                                    cellEl.setAttribute("deps", deps);
+                                }
                             }
-                            String deps = joinRefs(cell.getDependents());
-                            if (!deps.isEmpty()) {
-                                cellEl.setAttribute("deps", deps);
-                            }
+                            calcCellsEl.appendChild(cellEl);
                         }
-                        sheetEl.appendChild(cellEl);
+                        if ((gridText != null && !gridText.trim().isEmpty())
+                                || (format != null && !format.isEmpty())
+                                || (alignment != null && !alignment.isEmpty())) {
+                            Element cellEl = doc.createElement("cell");
+                            cellEl.setAttribute("row", String.valueOf(r + 1));
+                            cellEl.setAttribute("col", String.valueOf(c));
+                            cellEl.setAttribute("text", gridText == null ? "" : gridText);
+                            if (format != null && !format.isEmpty()) {
+                                cellEl.setAttribute("format", format);
+                            }
+                            if (alignment != null && !alignment.isEmpty()) {
+                                cellEl.setAttribute("align", alignment);
+                            }
+                            presCellsEl.appendChild(cellEl);
+                        }
                     }
                 }
                 Element namesEl = doc.createElement("names");
@@ -208,7 +270,8 @@ public final class WorkbookIO {
                 if (anyNames) {
                     sheetEl.appendChild(namesEl);
                 }
-                sheetsEl.appendChild(sheetEl);
+                calcSheetsEl.appendChild(sheetEl);
+                presSheetsEl.appendChild(presSheetEl);
             }
 
             Transformer t = TransformerFactory.newInstance().newTransformer();
@@ -228,18 +291,54 @@ public final class WorkbookIO {
             DocumentBuilder db = dbf.newDocumentBuilder();
             Document doc = db.parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
 
-            String variablesText = "";
-            Element vars = firstChild(doc, "variables");
-            if (vars != null) {
-                variablesText = vars.getTextContent();
-            }
+            Element root = doc.getDocumentElement();
+            // New (split) format: <calculation> (evaluation data) + <presentation>.
+            Element calcEl = childElement(root, "calculation");
+            boolean split = calcEl != null;
+
+            Element vars = split ? childElement(calcEl, "variables") : firstChild(doc, "variables");
+            String variablesText = vars == null ? "" : vars.getTextContent();
 
             LoadedWorkbook wb = new LoadedWorkbook(variablesText == null ? "" : variablesText);
-            Element sheetsEl = firstChild(doc, "sheets");
+            Element sheetsEl = split ? childElement(calcEl, "sheets") : firstChild(doc, "sheets");
+            // Presentation cells per sheet, keyed "row,col" (0-based).
+            List<Map<String, Element>> presentation = new ArrayList<>();
+            if (split) {
+                Element presSection = childElement(root, "presentation");
+                if (presSection != null) {
+                    String order = presSection.getAttribute("order");
+                    if (order != null && !order.isEmpty()) {
+                        for (String part : order.split(";")) {
+                            try {
+                                wb.visualOrder.add(Integer.parseInt(part.trim()) - 1);
+                            } catch (NumberFormatException ignored) {
+                                // skip a malformed order entry
+                            }
+                        }
+                    }
+                    String active = presSection.getAttribute("active");
+                    if (active != null && !active.isEmpty()) {
+                        try {
+                            wb.activeSheet = Integer.parseInt(active.trim()) - 1;
+                        } catch (NumberFormatException ignored) {
+                            // skip a malformed active tab
+                        }
+                    }
+                }
+                Element presSheetsEl = presSection == null ? null : childElement(presSection, "sheets");
+                if (presSheetsEl != null) {
+                    NodeList presSheets = presSheetsEl.getElementsByTagName("sheet");
+                    for (int i = 0; i < presSheets.getLength(); i++) {
+                        presentation.add(cellsByKey((Element) presSheets.item(i)));
+                    }
+                }
+            }
             if (sheetsEl != null) {
                 NodeList sheetNodes = sheetsEl.getElementsByTagName("sheet");
                 for (int i = 0; i < sheetNodes.getLength(); i++) {
                     Element sheetEl = (Element) sheetNodes.item(i);
+                    Map<String, Element> presCells = i < presentation.size()
+                            ? presentation.get(i) : java.util.Collections.emptyMap();
                     int rows = intAttr(sheetEl, "rows");
                     int cols = intAttr(sheetEl, "cols");
                     LoadedSheet ls = new LoadedSheet(rows, cols);
@@ -264,8 +363,16 @@ public final class WorkbookIO {
                     NodeList cellNodes = sheetEl.getElementsByTagName("cell");
                     for (int j = 0; j < cellNodes.getLength(); j++) {
                         Element cellEl = (Element) cellNodes.item(j);
-                        String text = strAttr(cellEl, "text");
+                        int row = intAttr(cellEl, "row") - 1;
+                        int col = intAttr(cellEl, "col") - 1;
+                        Element presCell = presCells.get(row + "," + col);
+                        String text = presCell != null ? strAttr(presCell, "text") : strAttr(cellEl, "text");
+                        String format = presCell != null ? strAttr(presCell, "format") : strAttr(cellEl, "format");
+                        String align = presCell != null ? strAttr(presCell, "align") : strAttr(cellEl, "align");
                         String raw = strAttr(cellEl, "raw");
+                        if (text == null) {
+                            text = raw;      // no presentation text: fall back to the source
+                        }
                         Element exprEl = childElement(cellEl, "expr");
                         Node expression = null;
                         if (exprEl != null) {
@@ -283,13 +390,13 @@ public final class WorkbookIO {
                             wb.fullyStored = false;   // fall back to recalculating
                         }
                         ls.cells.add(new LoadedCell(
-                                intAttr(cellEl, "row") - 1,
-                                intAttr(cellEl, "col") - 1,
+                                row,
+                                col,
                                 text,
                                 raw,
                                 typeAttr(cellEl, "type"),
-                                strAttr(cellEl, "format"),
-                                strAttr(cellEl, "align"),
+                                format,
+                                align,
                                 expression,
                                 parseRefs(strAttr(cellEl, "refs")),
                                 parseRefs(strAttr(cellEl, "deps")),
@@ -355,6 +462,17 @@ public final class WorkbookIO {
             }
         }
         return null;
+    }
+
+    /** Presentation cells of a sheet keyed "row,col" (0-based). */
+    private static Map<String, Element> cellsByKey(Element sheetEl) {
+        Map<String, Element> map = new LinkedHashMap<>();
+        NodeList cellNodes = sheetEl.getElementsByTagName("cell");
+        for (int j = 0; j < cellNodes.getLength(); j++) {
+            Element cellEl = (Element) cellNodes.item(j);
+            map.put((intAttr(cellEl, "row") - 1) + "," + (intAttr(cellEl, "col") - 1), cellEl);
+        }
+        return map;
     }
 
     /** Compact, semicolon-separated form of a cell reference list, e.g. "S1(2,3);S2(1,1)". */

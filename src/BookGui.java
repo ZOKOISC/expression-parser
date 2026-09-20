@@ -736,7 +736,12 @@ public class BookGui {
     /** Writes every sheet and the variables to one workbook XML file. */
     private void saveTo(Path target) {
         try {
-            String xml = WorkbookIO.toXml(book, varsArea.getText());
+            List<Integer> order = new ArrayList<>();
+            for (SheetView v : sheets) {
+                order.add(book.indexOf(v.sheet));
+            }
+            int activeTab = tabs.getSelectedIndex();
+            String xml = WorkbookIO.toXml(book, varsArea.getText(), order, activeTab);
             Files.writeString(target, xml);
             currentFile = target.toAbsolutePath().normalize();
             currentDir = currentFile.getParent() != null ? currentFile.getParent().toFile() : null;
@@ -800,10 +805,44 @@ public class BookGui {
             if (!sheets.isEmpty()) {
                 tabs.setSelectedIndex(0);
             }
+            applyVisualOrder(loaded.visualOrder, loaded.activeSheet);
             updateTitle();
             setStatus("Workbook loaded from " + file.getFileName());
         } catch (Exception ex) {
             showError(ex);
+        }
+    }
+
+    /**
+     * Applies the saved presentation of the sheet tabs: {@code order} lists the
+     * restored sheet positions in the order their tabs were shown and
+     * {@code activeTab} is the tab that was selected. Rebuilds the tabs in that
+     * order and selects the saved tab, so the Book GUI reopens as it was saved.
+     */
+    private void applyVisualOrder(List<Integer> order, int activeTab) {
+        if (order != null && !order.isEmpty()) {
+            List<SheetView> reordered = new ArrayList<>();
+            for (int idx : order) {
+                if (idx >= 0 && idx < sheets.size() && !reordered.contains(sheets.get(idx))) {
+                    reordered.add(sheets.get(idx));
+                }
+            }
+            for (SheetView v : sheets) {
+                if (!reordered.contains(v)) {
+                    reordered.add(v);
+                }
+            }
+            sheets.clear();
+            sheets.addAll(reordered);
+            tabs.removeAll();
+            for (SheetView v : sheets) {
+                tabs.addTab(v.sheet.name(), scrollFor(v));
+            }
+        }
+        if (activeTab >= 0 && activeTab < tabs.getTabCount()) {
+            tabs.setSelectedIndex(activeTab);
+        } else if (tabs.getTabCount() > 0) {
+            tabs.setSelectedIndex(0);
         }
     }
 

@@ -239,6 +239,16 @@ public class SheetApiSample {
         check(storedXml.contains("<expr"), true, "optimized expression trees persisted");
         check(storedXml.contains("refs=\""), true, "referenced sets persisted");
         check(storedXml.contains("deps=\""), true, "recalculation lists persisted");
+        check(storedXml.contains("<calculation>") && storedXml.contains("<presentation>"), true,
+                "calculation and presentation sections separated");
+        String calcSection = storedXml.substring(storedXml.indexOf("<calculation>"),
+                storedXml.indexOf("</calculation>"));
+        String presSection = storedXml.substring(storedXml.indexOf("<presentation>"),
+                storedXml.indexOf("</presentation>"));
+        check(calcSection.contains("raw=") && calcSection.contains("<expr") && !calcSection.contains("text="),
+                true, "calculation section holds only evaluation data");
+        check(presSection.contains("text=") && !presSection.contains("raw="),
+                true, "presentation section holds only display data");
         String changedVars = storedXml.replace("<variables>x = 4</variables>", "<variables>x = 40</variables>");
         check(!changedVars.equals(storedXml), true, "variables text replaced for the no-recalc test");
         try (SheetAPI stale = SheetAPI.loadSheet(changedVars)) {
