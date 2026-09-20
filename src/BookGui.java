@@ -740,6 +740,9 @@ public class BookGui {
     }
 
     private void resizeRowNumberColumn(JTable grid, int rows) {
+        if (grid.getColumnModel().getColumnCount() == 0) {
+            return;   // an empty (closed) sheet has no columns to size
+        }
         int digits = String.valueOf(rows).length();
         int w = digits * 8 + 12;
         grid.getColumnModel().getColumn(0).setPreferredWidth(w);
@@ -970,7 +973,11 @@ public class BookGui {
             book = new SheetBook();
             varsArea.setText(loaded.variablesText);
             List<SheetView> created = new ArrayList<>();
+            List<WorkbookIO.LoadedSheet> kept = new ArrayList<>();
             for (WorkbookIO.LoadedSheet ls : loaded.sheets) {
+                if (ls.rows == 0 && ls.cols == 0) {
+                    continue;   // a deleted sheet's ghost slot is not restored
+                }
                 SheetView v = createSheetView();
                 v.sheet.setName(ls.name);
                 v.sheet.setUuid(ls.uuid);
@@ -982,12 +989,13 @@ public class BookGui {
                 v.sheet.setNamedRanges(ls.ranges);
                 tabs.addTab(v.sheet.name(), scrollFor(v));
                 created.add(v);
+                kept.add(ls);
             }
             // Restore cells only once every sheet name and named reference exists,
             // so cross-sheet references (s1.Name) resolve while loading.
-            for (int i = 0; i < loaded.sheets.size(); i++) {
+            for (int i = 0; i < created.size(); i++) {
                 SheetView v = created.get(i);
-                for (WorkbookIO.LoadedCell lc : loaded.sheets.get(i).cells) {
+                for (WorkbookIO.LoadedCell lc : kept.get(i).cells) {
                     v.sheet.restoreCell(lc);
                 }
             }

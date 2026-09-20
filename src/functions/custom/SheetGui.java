@@ -679,6 +679,9 @@ public class SheetGui {
     }
 
     private void resizeRowNumberColumn(JTable grid, int rows) {
+        if (grid.getColumnModel().getColumnCount() == 0) {
+            return;   // an empty (closed) sheet has no columns to size
+        }
         int digits = String.valueOf(rows).length();
         int w = digits * 8 + 12;
         grid.getColumnModel().getColumn(0).setPreferredWidth(w);

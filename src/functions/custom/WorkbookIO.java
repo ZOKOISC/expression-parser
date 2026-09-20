@@ -188,6 +188,9 @@ public final class WorkbookIO {
 
             for (int s = 0; s < book.size(); s++) {
                 Sheet sheet = book.get(s);
+                if (sheet.rows() == 0 && sheet.cols() == 0) {
+                    continue;   // a deleted sheet's closed slot: never write a ghost
+                }
                 String sheetName = sheet.name();
                 Element sheetEl = doc.createElement("sheet");
                 sheetEl.setAttribute("rows", String.valueOf(sheet.rows()));
