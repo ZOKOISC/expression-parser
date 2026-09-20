@@ -589,6 +589,23 @@ public class Sheet implements CellProvider {
         return s == null ? "" : s;
     }
 
+    /**
+     * The text the in-place grid editor should start with for a cell. When the
+     * cell is numeric and carries a non-percent format pattern (so its grid text
+     * is the formatted display), the editor starts from the actual numeric value
+     * instead of the formatted string. Percent-patterned and other cells keep
+     * their grid text.
+     */
+    public String editValue(int row, int col) {
+        Cell cell = cell(row, col);
+        String pattern = cell.getFormatPattern();
+        if (pattern != null && !pattern.isEmpty() && !pattern.endsWith("%")
+                && cell.getValue() instanceof Number n) {
+            return EvalUtil.format(n.doubleValue());
+        }
+        return getRawValue(row, col);
+    }
+
     public void setRawValue(int row, int col, String value) {
         String v = String.valueOf(value).trim();
         if (col > 0 && row >= 0 && row < cells.length) {

@@ -38,7 +38,9 @@ public class ArrayModel extends AbstractTableModel {
     @Override
     public Object getValueAt(int row, int col) {
         if (col == 0) return row + 1;
-        return sheet.getRawValue(row, col);
+        // May differ from the grid text: a numeric cell with a non-percent format
+        // pattern exposes its actual numeric value to the editor.
+        return sheet.editValue(row, col);
     }
 
     @Override
