@@ -51,6 +51,7 @@ import functions.custom.Sheet;
 import functions.custom.SheetBook;
 import functions.custom.WorkbookIO;
 import functions.custom.Library;
+import functions.custom.NamedCellsDialog;
 
 public class BookGui {
 
@@ -58,6 +59,9 @@ public class BookGui {
         final Sheet sheet = new Sheet();
         final ArrayModel model = new ArrayModel(sheet);
         final JTable grid = new JTable(model);
+        /** Cell where the last plain left-button drag started; -1 when inactive. */
+        int dragAnchorRow = -1;
+        int dragAnchorCol = -1;
     }
 
     private final JTextArea varsArea = new JTextArea(5, 40);
@@ -144,6 +148,7 @@ public class BookGui {
         JButton btnCreate = new JButton("Resize Grid");
         JButton btnSave = new JButton("Save XML");
         JButton btnOpen = new JButton("Open XML");
+        JButton btnNames = new JButton("Named cells");
         arrayControls.add(btnCreate);
         JButton btnCreateSheet = new JButton("Create sheet");
         JButton btnDeleteSheet = new JButton("Delete sheet");
@@ -151,6 +156,7 @@ public class BookGui {
         arrayControls.add(btnDeleteSheet);
         arrayControls.add(btnSave);
         arrayControls.add(btnOpen);
+        arrayControls.add(btnNames);
         typeLabel.setFont(mono);
         arrayControls.add(typeLabel);
 
@@ -237,6 +243,7 @@ public class BookGui {
         btnDeleteSheet.addActionListener(e -> doDeleteSheet());
         btnSave.addActionListener(e -> doSaveXml());
         btnOpen.addActionListener(e -> doOpenXml());
+        btnNames.addActionListener(e -> openNamedCellsPopup());
     }
 
     private SheetView createSheetView() {
@@ -244,6 +251,10 @@ public class BookGui {
         book.add(v.sheet);
         v.sheet.install(MathFunctions.createRegistry());
         v.grid.setFillsViewportHeight(true);
+        // Cell-click selects the clicked cell only; whole rows/columns are
+        // selected via the row-number column and the column headers instead.
+        v.grid.setCellSelectionEnabled(true);
+        v.grid.getTableHeader().setReorderingAllowed(false);
         v.grid.getModel().addTableModelListener(e -> {
             if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
                 Cell cell = v.sheet.handleCellUpdate(e.getFirstRow(), e.getColumn(),
@@ -256,16 +267,104 @@ public class BookGui {
         v.grid.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
-                if (e.isPopupTrigger()) showCellMenu(e);
+                if (e.isPopupTrigger()) {
+                    showCellMenu(v, e);
+                } else if (e.getButton() == MouseEvent.BUTTON1) {
+                    int row = v.grid.rowAtPoint(e.getPoint());
+                    int col = v.grid.columnAtPoint(e.getPoint());
+                    if (row >= 0 && row < v.sheet.rows() && col >= 0 && col <= v.sheet.cols()) {
+                        if (col == 0) {
+                            v.dragAnchorRow = -1;   // whole-row select: no drag range
+                            selectWholeRow(v, row);
+                        } else {
+                            selectSingleCell(v, row, col, e.isControlDown(), e.isShiftDown());
+                            if (!e.isControlDown() && !e.isShiftDown()) {
+                                v.dragAnchorRow = row;   // possible rectangular drag
+                                v.dragAnchorCol = col;
+                            } else {
+                                v.dragAnchorRow = -1;
+                            }
+                        }
+                    }
+                }
             }
 
             @Override
             public void mouseReleased(MouseEvent e) {
-                if (e.isPopupTrigger()) showCellMenu(e);
+                if (e.isPopupTrigger()) showCellMenu(v, e);
+                if (e.getButton() == MouseEvent.BUTTON1) {
+                    v.dragAnchorRow = -1;
+                    v.dragAnchorCol = -1;
+                }
+            }
+
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() >= 2 && e.getButton() == MouseEvent.BUTTON1 && !e.isPopupTrigger()) {
+                    int row = v.grid.rowAtPoint(e.getPoint());
+                    int col = v.grid.columnAtPoint(e.getPoint());
+                    if (row >= 0 && col > 0 && row < v.sheet.rows() && col <= v.sheet.cols()) {
+                        showEditDialog(v, row, col, v.sheet.cell(row, col));
+                    }
+                }
+            }
+        });
+        // Dragging the mouse over data cells extends the selection to a rectangle.
+        v.grid.addMouseMotionListener(new MouseAdapter() {
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                if (v.dragAnchorRow < 0
+                        || (e.getModifiersEx() & MouseEvent.BUTTON1_DOWN_MASK) == 0) {
+                    return;
+                }
+                int row = v.grid.rowAtPoint(e.getPoint());
+                int col = v.grid.columnAtPoint(e.getPoint());
+                if (row < 0 || row >= v.sheet.rows()) {
+                    return;
+                }
+                if (col < 1) {
+                    col = 1;                       // drag over the row-number column: clamp
+                } else if (col > v.sheet.cols()) {
+                    col = v.sheet.cols();
+                }
+                v.grid.setCellSelectionEnabled(true);
+                v.grid.changeSelection(row, col, false, true);   // extend to a rectangle
+            }
+        });
+        v.grid.getTableHeader().addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.getButton() != MouseEvent.BUTTON1) {
+                    return;
+                }
+                int col = v.grid.getTableHeader().columnAtPoint(e.getPoint());
+                if (col > 0 && col <= v.sheet.cols()) {
+                    selectWholeColumn(v, col);
+                }
             }
         });
         sheets.add(v);
         return v;
+    }
+
+    /** Clicking a data cell selects just that cell (JTable defaults to rows). */
+    private static void selectSingleCell(SheetView v, int row, int col, boolean toggle, boolean extend) {
+        v.grid.setCellSelectionEnabled(true);
+        v.grid.changeSelection(row, col, toggle, extend);
+    }
+
+    /** Clicking the row number (column 0) selects the whole row. */
+    private static void selectWholeRow(SheetView v, int row) {
+        v.grid.setRowSelectionAllowed(true);
+        v.grid.setColumnSelectionAllowed(false);
+        v.grid.getSelectionModel().setSelectionInterval(row, row);
+    }
+
+    /** Clicking a column header (the column number) selects the whole column. */
+    private static void selectWholeColumn(SheetView v, int col) {
+        v.grid.setRowSelectionAllowed(false);
+        v.grid.setColumnSelectionAllowed(true);
+        v.grid.getColumnModel().getSelectionModel().setSelectionInterval(col, col);
     }
 
     private JScrollPane scrollFor(SheetView v) {
@@ -404,8 +503,7 @@ public class BookGui {
         setStatus("Sheet renamed: " + v.sheet.name());
     }
 
-    private void showCellMenu(MouseEvent e) {
-        SheetView v = current();
+    private void showCellMenu(SheetView v, MouseEvent e) {
         int row = v.grid.rowAtPoint(e.getPoint());
         int col = v.grid.columnAtPoint(e.getPoint());
         if (row < 0 || col <= 0) return;
@@ -418,6 +516,7 @@ public class BookGui {
             item.addActionListener(ev -> {
                 try {
                     v.sheet.convertCell(row, col, dt);
+                    v.grid.repaint();
                 } catch (Exception ex) {
                     showError(ex);
                 }
@@ -428,6 +527,9 @@ public class BookGui {
         JMenuItem editCell = new JMenuItem("Edit cell content...");
         editCell.addActionListener(ev -> showEditDialog(v, row, col, cell));
         menu.add(editCell);
+        JMenuItem namedCells = new JMenuItem("Named cells…");
+        namedCells.addActionListener(ev -> openNamedCellsPopup(v, row, col));
+        menu.add(namedCells);
         JMenuItem setFormat = new JMenuItem("Set format pattern…");
         setFormat.addActionListener(ev -> {
             String pat = JOptionPane.showInputDialog(v.grid,
@@ -454,6 +556,69 @@ public class BookGui {
         menu.show(v.grid, e.getX(), e.getY());
     }
 
+    /**
+     * Opens the "Named cells" manager for the sheet selected in the tab. The
+     * cell/rectangle selected in its grid becomes the default for
+     * adding/positioning in the dialog.
+     */
+    private void openNamedCellsPopup() {
+        SheetView v = current();
+        if (v == null) {
+            return;
+        }
+        int[] sel = currentGridSelection(v);
+        openNamedCellsPopup(v, sel == null ? -1 : sel[0], sel == null ? -1 : sel[1]);
+    }
+
+    /**
+     * Opens the "Named cells" manager for one sheet; if the given cell is
+     * already named the list is positioned on it, otherwise the dialog offers
+     * to name it. A grid drag selection becomes the default rectangle.
+     *
+     * @param defaultRow  active grid row (0-based), or -1 for none
+     * @param defaultCol  active grid column (1-based), or -1 for none
+     */
+    private void openNamedCellsPopup(SheetView v, int defaultRow, int defaultCol) {
+        NamedCellsDialog dlg = new NamedCellsDialog(frame, v.sheet, v.grid,
+                defaultRow, defaultCol);
+        dlg.setLocationRelativeTo(frame);
+        dlg.setVisible(true);
+        for (SheetView sv : sheets) {
+            sv.grid.repaint();
+        }
+    }
+
+    /** The currently selected grid cell of the view, or null when nothing is selected. */
+    private int[] currentGridSelection(SheetView v) {
+        int[] range = currentRangeSelection(v);
+        if (range == null) {
+            return null;
+        }
+        return new int[]{range[0], range[2]};
+    }
+
+    /**
+     * The currently selected rectangle over data columns, or null. The result is
+     * {row0, row1, col0, col1} with 0-based rows and 1-based grid columns; the
+     * row-number column (0) is excluded from the rectangle.
+     */
+    private int[] currentRangeSelection(SheetView v) {
+        int r0 = v.grid.getSelectionModel().getMinSelectionIndex();
+        int r1 = v.grid.getSelectionModel().getMaxSelectionIndex();
+        int c0 = v.grid.getColumnModel().getSelectionModel().getMinSelectionIndex();
+        int c1 = v.grid.getColumnModel().getSelectionModel().getMaxSelectionIndex();
+        if (r0 < 0 || r1 < 0) {
+            return null;
+        }
+        c0 = Math.max(c0, 1);
+        c1 = Math.min(c1, v.sheet.cols());
+        if (r0 >= v.sheet.rows() || r1 < 0 || c1 < c0) {
+            return null;
+        }
+        r1 = Math.min(r1, v.sheet.rows() - 1);
+        return new int[]{r0, r1, c0, c1};
+    }
+
     private void showEditDialog(SheetView v, int row, int col, Cell cell) {
         try {
             v.sheet.setBindingsText(varsArea.getText());
@@ -464,6 +629,7 @@ public class BookGui {
         CellDialog dlg = new CellDialog((Frame) SwingUtilities.getWindowAncestor(v.grid),
                 cell, v.sheet.registry(), v.sheet.bindings());
         dlg.setPosition(row, col);
+        dlg.setCellName(v.sheet.cellName(row, col));
         dlg.setVisible(true);
         if (dlg.wasSaved()) {
             v.sheet.saveCell(row, col, dlg.getEditedText(), dlg.getEditedRawExpression(),
