@@ -507,6 +507,12 @@ public class Sheet implements CellProvider {
             if (registered != null && registered.getExpression() == null) {
                 registered.updateValue(v);
             }
+            // A percent literal like "15.2%" keeps its derived format pattern
+            // ("0.0%") persistently, so the grid renders the same text even
+            // after the cell is rebuilt and XML round-trips preserve the format.
+            if (Cell.isPercentLiteral(v)) {
+                setFormatPattern(row, col, Cell.percentFormatPattern(v));
+            }
         }
     }
 
@@ -561,11 +567,21 @@ public class Sheet implements CellProvider {
 
     public void saveCell(int row, int col, String text, String rawExpression, Node node,
                           DataType type, Set<CellRef> referenced, String formatPattern, String alignment) {
-        setRawValue(row, col, text == null ? "" : text);
-        Cell saved = Cell.parse(text == null ? "" : text);
+        String cellText = text == null ? "" : text;
+        setRawValue(row, col, cellText);
+        Cell saved = Cell.parse(cellText);
         saved.setRawExpression(rawExpression);
         saved.setType(type);
         saved.setExpression(node);
+        // A percent literal entry (grid or dialog Value field) defaults to the
+        // NUMERIC datatype, carries the numericPart/100 value and keeps a derived
+        // format pattern so the same text keeps displaying.
+        if (Cell.isPercentLiteral(cellText.trim())) {
+            saved.setType(DataType.NUMERIC);
+            if (formatPattern == null || formatPattern.isEmpty()) {
+                formatPattern = Cell.percentFormatPattern(cellText.trim());
+            }
+        }
         if (formatPattern != null && !formatPattern.isEmpty()) {
             saved.setFormatPattern(formatPattern);
         }

@@ -334,7 +334,7 @@ public class SheetGui {
                         } else if (val instanceof LocalTime t) {
                             setText(t.format(DateTimeFormatter.ofPattern(pat)));
                         } else if (val instanceof Number n) {
-                            setText(new DecimalFormat(pat).format(n));
+                            setText(Cell.formatNumber(pat, n));
                         }
                     } catch (Exception ignored) {
                         // pattern not applicable; keep default label text

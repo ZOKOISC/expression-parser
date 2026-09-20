@@ -147,6 +147,21 @@ public class SheetApiSample {
         check(blockRead.get(0).value(), 40.0, "C1 = Block[1,1] + Block[1,2] = 18 + 22");
         check(blockRead.get(0).dataType(), DataType.NUMERIC, "C1 data type NUMERIC");
 
+        // e) percent literals: "12.5%" is a NUMERIC cell whose value is the
+        //    numeric part divided by 100 (0.125); the derived format pattern
+        //    ("0.0%") displays the same "12.5%" text in the grid
+        System.out.println();
+        System.out.println("=== 5e. Percent literal: A3 = '12.5%' -> numeric 0.125 ===");
+        List<SheetAPI.CellResult> pct = api.getCellValues(List.of(SheetAPI.ref(3, 1)));
+        printResults("   A3 (12.5%): ", pct);
+        check(pct.get(0).value(), 0.125, "A3 = 12.5% -> value 0.125");
+        check(pct.get(0).dataType(), DataType.NUMERIC, "A3 data type NUMERIC");
+        List<SheetAPI.CellResult> pctExpr = api.setCellExpressions(List.of(
+                new SheetAPI.CellExpression(SheetAPI.ref(3, 2), "get(3,1) * 100")));
+        printResults("   setCellExpressions(B3, get(3,1)*100): ", pctExpr);
+        List<SheetAPI.CellResult> pctRef = api.getCellValues(List.of(SheetAPI.ref(3, 2)));
+        check(pctRef.get(0).value(), 12.5, "B3 = get(3,1)*100 = 12.5 (references 0.125)");
+
         // e) saveXml to a new file, then to the original file it was opened from
         System.out.println();
         System.out.println("=== 6. saveXml(name) and saveXml() ===");
@@ -167,6 +182,8 @@ public class SheetApiSample {
         check(xml.contains("raw=\"get('Gross') * 2 + x\""), true, "raw formula persists");
         check(xml.contains("get('Gross') * 2 + x"), true, "formula text survives");
         check(xml.contains("raw=\"Gross * 2\""), true, "formula set by name persists");
+        check(xml.contains("text=\"12.5%\""), true, "percent literal text persists");
+        check(xml.contains("format=\"0.0%\""), true, "percent display pattern persists");
         System.out.println("   " + xml.lines()
                 .filter(l -> l.contains("named") || l.contains("Gross"))
                 .findFirst().orElse("(no names found!)").trim());
@@ -190,6 +207,11 @@ public class SheetApiSample {
                     new SheetAPI.CellExpression(SheetAPI.ref(1, 2), "Block[2,2]")));
             List<SheetAPI.CellResult> strBlock = reloadedStr.getCellValues(List.of(SheetAPI.ref(1, 2)));
             check(strBlock.get(0).value(), 14.0, "loadSheet(xml text): Block[2,2] = C3 = 14");
+            List<SheetAPI.CellResult> strPct = reloadedStr.getCellValues(List.of(SheetAPI.ref(3, 1)));
+            check(strPct.get(0).value(), 0.125, "loadSheet(xml text): A3 percent = 0.125");
+            check(strPct.get(0).dataType(), DataType.NUMERIC, "loadSheet(xml text): A3 type NUMERIC");
+            List<SheetAPI.CellResult> strPctRef = reloadedStr.getCellValues(List.of(SheetAPI.ref(3, 2)));
+            check(strPctRef.get(0).value(), 12.5, "loadSheet(xml text): B3 references A3 (12.5)");
         }
         try (SheetAPI fromFile = SheetAPI.loadSheet(savedFile.toFile())) {
             List<SheetAPI.CellResult> fileC2 = fromFile.getCellValues(List.of(SheetAPI.ref(2, 3)));
@@ -262,6 +284,9 @@ public class SheetApiSample {
         // formulas as Block[1,1] (B2) .. Block[2,2] (C3).
         sheet.setRangeName(1, 2, 2, 3, "Block");
         sheet.setRawValue(1, 1, "7");
+        // Percent literal: stored as the entered text, kept as numeric/100 with
+        // a derived display pattern ("12.5%" -> 0.125, format "0.0%").
+        sheet.setRawValue(2, 1, "12.5%");
         Files.writeString(file, WorkbookIO.toXml(book, "x = 4"));
     }
 

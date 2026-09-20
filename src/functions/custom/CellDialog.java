@@ -163,7 +163,14 @@ public class CellDialog extends JDialog {
         }
 		Object v = cell.getValue();
 		String rawExpression = cell.getRawExpression();
-        valueField.setText(v == null ? "" : String.valueOf(v));
+        // Percent-patterned numeric cells show their displayed text (e.g.
+        // "15.2%") in the Value field instead of the raw divided value.
+        String shown = (v instanceof Number)
+                && cell.getFormatPattern() != null
+                && cell.getFormatPattern().endsWith("%")
+                ? cell.toTextValue()
+                : String.valueOf(v);
+        valueField.setText(v == null ? "" : shown);
         if (rawExpression == null) 
 			exprArea.setText("");
 		else 
@@ -273,24 +280,56 @@ public class CellDialog extends JDialog {
         saved = false;
     }
 
+    /**
+     * True when the Expression tab holds no definition or only a plain literal
+     * (a constant), so an edit made in the Value field is authoritative.
+     */
+    private boolean isLiteralExpressionText(String area) {
+        if (area == null || area.trim().isEmpty()) {
+            return true;
+        }
+        try {
+            return Expression.parse(area, registry).getOptimized() instanceof ConstantNode;
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
     private void doSave() {
-        String raw = exprArea.getText();
+        String valueText = valueField.getText();
         formatPattern = formatField.getText().trim();
         Object sel = alignmentCombo.getSelectedItem();
         this.alignment = sel != null && !"Default".equals(sel) ? sel.toString() : "";
-        if (raw == null || raw.trim().isEmpty()) {
-            raw = cell.getRawExpression();
+        boolean percentEntry = Cell.isPercentLiteral(valueText == null ? "" : valueText)
+                && isLiteralExpressionText(exprArea.getText());
+        if (percentEntry) {
+            // A percent literal (e.g. "15.2%") entered into the Value field of a
+            // literal cell becomes a literal percent cell (numeric/100 value,
+            // derived format pattern). The expression text is replaced so the
+            // raw source stays consistent with the saved value.
+            exprArea.setText(valueText.trim());
+            lastNode = null;
+            referencedCells = null;
+            if (formatPattern.isEmpty()) {
+                formatPattern = Cell.percentFormatPattern(valueText);
+            }
         }
-        if (raw != null && !raw.trim().isEmpty()) {
-            try {
-                lastNode = Expression.parse(raw, registry).getOptimized();
-            } catch (Exception ignored) {
+        String raw = exprArea.getText();
+        if (!percentEntry) {
+            if (raw == null || raw.trim().isEmpty()) {
+                raw = cell.getRawExpression();
+            }
+            if (raw != null && !raw.trim().isEmpty()) {
+                try {
+                    lastNode = Expression.parse(raw, registry).getOptimized();
+                } catch (Exception ignored) {
+                    lastNode = null;
+                }
+            } else {
                 lastNode = null;
             }
-        } else {
-            lastNode = null;
         }
-		referencedCells = lastNode == null ? null : lastNode.collectReferenced();
+        referencedCells = lastNode == null ? null : lastNode.collectReferenced();
         saved = true;
         dispose();
     }

@@ -2,6 +2,7 @@ package functions.custom;
 
 import java.awt.Color;
 import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -9,10 +10,13 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import expr.DataType;
 import expr.EvalUtil;
@@ -32,6 +36,10 @@ public class Cell {
     public static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     public static final DateTimeFormatter DATETIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     public static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
+
+    /** A percent literal like {@code 15.2%} or {@code -0.5 %} (sign, digits, optional fraction, '%'). */
+    private static final Pattern PERCENT_PATTERN =
+            Pattern.compile("^([+-]?)(\\d+)(?:\\.(\\d+))?\\s*%$");
 
     private DataType type;
     private Object value;
@@ -98,6 +106,12 @@ public class Cell {
         this.rawExpression = rawText;
         this.expression = constantFor(value);
         this.referenced = null;
+        // Adopt the format pattern derived from a percent literal (e.g. "15.2%"
+        // -> "0.0%") so the entered text keeps displaying; any explicitly set
+        // pattern is preserved for non-percent input.
+        if (parsed.getFormatPattern() != null) {
+            this.formatPattern = parsed.getFormatPattern();
+        }
     }
 	
     public ConstantNode constantNode() {
@@ -212,6 +226,20 @@ public class Cell {
         this.horizontalAlignment = horizontalAlignment;
     }
 
+    /**
+     * Formats the numeric value with the given {@code DecimalFormat} pattern.
+     * Percent patterns (ending in {@code '%'}) always use root-locale symbols,
+     * so a percent cell like {"12.5%"} keeps its text on every locale instead
+     * of switching to a comma decimal separator.
+     */
+    public static String formatNumber(String pattern, Number value) {
+        DecimalFormat df = new DecimalFormat(pattern);
+        if (pattern.endsWith("%")) {
+            df.setDecimalFormatSymbols(DecimalFormatSymbols.getInstance(Locale.ROOT));
+        }
+        return df.format(value);
+    }
+
     public String display() {
         if (value == null) {
             return "";
@@ -228,7 +256,7 @@ public class Cell {
                     return t.format(DateTimeFormatter.ofPattern(formatPattern));
                 }
                 if (value instanceof Number n) {
-                    return new DecimalFormat(formatPattern).format(n);
+                    return formatNumber(formatPattern, n);
                 }
             } catch (Exception ignored) {
                 // pattern not applicable; fall back to default display
@@ -314,6 +342,13 @@ public class Cell {
         } catch (DateTimeParseException ignored) {
             // not a time literal
         }
+        Matcher percent = PERCENT_PATTERN.matcher(t);
+        if (percent.matches()) {
+            String numericPart = percent.group(1) + percent.group(2)
+                    + (percent.group(3) == null ? "" : "." + percent.group(3));
+            return percentCell(numericPart,
+                    percent.group(3) == null ? 0 : percent.group(3).length(), s);
+        }
         if (t.equals("0")) {
             Cell c = new Cell(DataType.NUMERIC, 0.0);
             c.setRawExpression(s);
@@ -346,6 +381,58 @@ public class Cell {
             }
         }
         return true;
+    }
+
+    /**
+     * True when the text is a percent literal such as {@code "15.2%"}: an
+     * optional sign, digits, an optional decimal fraction and a {@code %}
+     * (trailing whitespace before the percent sign allowed).
+     */
+    public static boolean isPercentLiteral(String text) {
+        return text != null && PERCENT_PATTERN.matcher(text.trim()).matches();
+    }
+
+    /**
+     * The {@code DecimalFormat} pattern that displays the given percent literal
+     * text, e.g. {@code "0.0%"} for {@code "15.2%"} / {@code "0%"} for
+     * {@code "15%"}. Returns {@code null} when the text is not a percent
+     * literal. The pattern shows numericPart/{@code 100} times 100 with a
+     * {@code %} sign, reproducing the entered text (e.g. "15.2%").
+     */
+    public static String percentFormatPattern(String text) {
+        if (text == null) {
+            return null;
+        }
+        Matcher m = PERCENT_PATTERN.matcher(text.trim());
+        if (!m.matches()) {
+            return null;
+        }
+        return percentDecimalPattern(m.group(3) == null ? 0 : m.group(3).length());
+    }
+
+    /**
+     * Creates a percent-literal cell: the numeric part divided by 100 becomes
+     * the NUMERIC value, and the derived format pattern (e.g. {@code "0.0%"})
+     * reproduces the entered text like {@code "15.2%"} when displayed.
+     */
+    private static Cell percentCell(String numericPart, int fracDigits, String raw) {
+        Cell c = new Cell(DataType.NUMERIC, Double.parseDouble(numericPart) / 100.0);
+        c.setFormatPattern(percentDecimalPattern(fracDigits));
+        c.setRawExpression(raw);
+        return c;
+    }
+
+    /** DecimalFormat pattern: value &times; 100 shown with the given fraction digits and a {@code %} sign. */
+    private static String percentDecimalPattern(int fracDigits) {
+        StringBuilder sb = new StringBuilder("0");
+        if (fracDigits > 0) {
+            sb.append('.');
+            for (int i = 0; i < fracDigits; i++) {
+                sb.append('0');
+            }
+        }
+        sb.append('%');
+        return sb.toString();
     }
 
     /**
