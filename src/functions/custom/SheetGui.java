@@ -5,6 +5,7 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Frame;
+import java.awt.GridLayout;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -159,24 +160,30 @@ public class SheetGui {
     }
 
     /**
-     * Builds the File menu: Open/Save/Save As XML, all with keyboard
-     * accelerators and wired to the same handlers as the toolbar buttons.
+     * Builds the File menu: New Sheet plus Open/Save/Save As XML, all with
+     * keyboard accelerators and wired to the same handlers as the toolbar
+     * buttons.
      */
     private JMenuBar buildMenuBar() {
         JMenuBar menuBar = new JMenuBar();
         JMenu fileMenu = new JMenu("File");
+        JMenuItem itemNew = new JMenuItem("New Sheet");
         JMenuItem itemSave = new JMenuItem("Save XML");
         JMenuItem itemSaveAs = new JMenuItem("Save As...");
         JMenuItem itemOpen = new JMenuItem("Open XML");
+        itemNew.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_N, InputEvent.CTRL_DOWN_MASK));
         itemSave.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK));
         itemSaveAs.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S,
                 InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
         itemOpen.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_DOWN_MASK));
+        fileMenu.add(itemNew);
+        fileMenu.addSeparator();
         fileMenu.add(itemSave);
         fileMenu.add(itemSaveAs);
         fileMenu.addSeparator();
         fileMenu.add(itemOpen);
         menuBar.add(fileMenu);
+        itemNew.addActionListener(e -> doNewSheet());
         itemSave.addActionListener(e -> doSaveXml());
         itemSaveAs.addActionListener(e -> doSaveXmlAs());
         itemOpen.addActionListener(e -> doOpenXml());
@@ -404,6 +411,64 @@ public class SheetGui {
         } catch (Exception ex) {
             showError(ex);
         }
+    }
+
+    /**
+     * Asks for the dimensions of a new empty sheet (default 2 rows x 4 columns)
+     * and replaces the current sheet with it: its cells, named references and
+     * formats are discarded and the grid becomes an empty rows x columns grid.
+     * The workbook is no longer tied to the file it was loaded from, so the
+     * title drops the file name and Save XML asks for a name again. The
+     * variables text is kept.
+     */
+    private void doNewSheet() {
+        JTextField rowsInput = new JTextField("2", 5);
+        JTextField colsInput = new JTextField("4", 5);
+        JPanel panel = new JPanel(new GridLayout(0, 1, 4, 4));
+        panel.add(new JLabel("Number of rows:"));
+        panel.add(rowsInput);
+        panel.add(new JLabel("Number of columns:"));
+        panel.add(colsInput);
+        int choice = JOptionPane.showConfirmDialog(frame, panel, "New sheet dimensions",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (choice != JOptionPane.OK_OPTION) {
+            return;
+        }
+        int rows;
+        int cols;
+        try {
+            rows = Integer.parseInt(rowsInput.getText().trim());
+            cols = Integer.parseInt(colsInput.getText().trim());
+        } catch (NumberFormatException ex) {
+            showError(new IllegalArgumentException("Rows and columns must be whole numbers."));
+            return;
+        }
+        if (rows < 1 || cols < 1 || rows > 100 || cols > 100) {
+            showError(new IllegalArgumentException("Rows and columns must be between 1 and 100."));
+            return;
+        }
+        newSheet(rows, cols);
+    }
+
+    /**
+     * Replaces the current sheet with a brand-new empty one of the given size,
+     * discarding its cells, named references and formats. The workbook is no
+     * longer tied to the loaded file (the title drops the file name and Save
+     * XML asks for a name again); the variables text is kept.
+     */
+    private void newSheet(int rows, int cols) {
+        book = new SheetBook();
+        view = createSheetView();
+        view.model.setSheetSize(rows, cols);
+        installRenderers(view);
+        resizeRowNumberColumn(view.grid, rows);
+        gridPane.setViewportView(view.grid);
+        view.sheet.setBindingsText(varsArea.getText());
+        rowsField.setText(String.valueOf(rows));
+        colsField.setText(String.valueOf(cols));
+        currentFile = null;
+        updateTitle();
+        setStatus("New empty sheet created: " + rows + "x" + cols + ".");
     }
 
     private void showCellMenu(SheetView v, MouseEvent e) {
