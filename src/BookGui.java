@@ -528,10 +528,21 @@ public class BookGui {
             setStatus("Cannot delete the last sheet.");
             return;
         }
-        int idx = tabs.getSelectedIndex();
-        tabs.removeTabAt(idx);
-        sheets.remove(idx);
-        book.remove(idx);
+        SheetView v = current();
+        if (v == null) {
+            return;
+        }
+        int tabIndex = tabs.getSelectedIndex();
+        int bookIndex = book.indexOf(v.sheet);
+        tabs.removeTabAt(tabIndex);
+        sheets.remove(tabIndex);
+        // Close the selected sheet in the book itself. Its slot stays reserved
+        // (so other sheets' references remain valid) but a closed slot is never
+        // written to XML. Removing by index would close the wrong sheet once the
+        // tabs have been dragged out of the book order.
+        if (bookIndex >= 0) {
+            book.remove(bookIndex);
+        }
         updateGridSizeFields();
         setStatus("Sheet deleted.");
     }
