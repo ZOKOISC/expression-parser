@@ -10,10 +10,20 @@ import java.util.Set;
 import java.util.Set;
 
 import expr.CellRef;
+import expr.CellRect;
+import expr.RangeValue;
+import expr.ArrayAccessNode;
+import expr.BinaryNode;
 import expr.ConstantNode;
 import expr.DataType;
+import expr.EvalUtil;
 import expr.Expression;
+import expr.FunctionNode;
+import expr.IfNode;
 import expr.Node;
+import expr.OperationsNode;
+import expr.UnaryNode;
+import expr.VariableNode;
 import functions.FunctionRegistry;
 
 public class Sheet implements CellProvider {
@@ -26,7 +36,13 @@ public class Sheet implements CellProvider {
     private final Map<String, String> formatPatterns = new LinkedHashMap<>();
     private final Map<String, String> alignments = new LinkedHashMap<>();
     private String name = "";
+    /** Named cell references of this sheet: name -> normalized CellRef (0-based). */
+    private final Map<String, CellRef> namedRefs = new LinkedHashMap<>();
+    /** Named rectangular ranges of this sheet: name -> normalized CellRect (0-based). */
+    private final Map<String, CellRect> namedRanges = new LinkedHashMap<>();
     private final Set<String> injectedSheetNameBindings = new LinkedHashSet<>();
+    private int activeRow = 0;
+    private int activeCol = 0;
 
     public Sheet() {
     }
@@ -34,6 +50,23 @@ public class Sheet implements CellProvider {
     public Sheet(SheetBook book) {
         this.book = book;
         this.cellMap = book.cellMap();
+    }
+
+    /** 0-based row of the actively edited cell (default 0). */
+    public int activeRow() {
+        return activeRow;
+    }
+
+    /** 0-based column of the actively edited cell (default 0). */
+    public int activeCol() {
+        return activeCol;
+    }
+
+    /** Tracks which cell is currently being edited so row()/col() (and the
+     *  cross-sheet sheetNdx()) report it when there is no recalculation context. */
+    public void setActiveCell(int row, int col) {
+        this.activeRow = row;
+        this.activeCol = col;
     }
 
     public void setSheetBook(SheetBook book) {
@@ -63,6 +96,11 @@ public class Sheet implements CellProvider {
     public void install(FunctionRegistry registry) {
         this.registry = registry;
         registry.register(book == null ? new ArrayGetFunction(this) : new ArrayGetFunction(this, book));
+        registry.register(book == null ? new RowFunction(this) : new RowFunction(this, book));
+        registry.register(book == null ? new ColFunction(this) : new ColFunction(this, book));
+        if (book != null) {
+            registry.register(new SheetNdxFunction(this, book));
+        }
     }
 
     public FunctionRegistry registry() {
@@ -103,6 +141,7 @@ public class Sheet implements CellProvider {
         bindings.clear();
         bindings.putAll(parseBindings(text));
         refreshSheetNameBindings();
+        refreshNamedRefBindings();
     }
 
     /**
@@ -131,6 +170,209 @@ public class Sheet implements CellProvider {
             }
             bindings.put(sheetName, (double) slot);
             injectedSheetNameBindings.add(sheetName);
+        }
+        refreshNamedRefBindings();
+    }
+
+    // ------------------------------------------------- named cell references
+
+    /**
+     * Named cell references are stored as name -> CellRef (0-based row/column,
+     * normalized to this sheet). A name can be used in expressions in two ways:
+     * <ul>
+     *   <li>as a variable-like binding, e.g. {@code Gross * 0.1} - the binding
+     *       always holds the current value of the named cell;</li>
+     *   <li>as a single-argument get: {@code get('Gross')}.</li>
+     * </ul>
+     * In both cases the named cell is tracked as a referenced cell, so editing
+     * it recalculates the formulas that use the name.
+     */
+
+    /** The CellRef a name resolves to (normalized to this sheet), or null. */
+    public CellRef namedRef(String name) {
+        CellRef ref = name == null ? null : namedRefs.get(name);
+        return ref == null ? null : ref.normalize(sheetIndex());
+    }
+
+    /** The name assigned to a cell, or null when it has none. */
+    public String cellName(int row, int col) {
+        CellRef target = new CellRef(sheetIndex(), row, col - 1);
+        for (Map.Entry<String, CellRef> e : namedRefs.entrySet()) {
+            if (e.getValue().equals(target)) {
+                return e.getKey();
+            }
+        }
+        return null;
+    }
+
+    /** All defined cell-name values (insertion order). */
+    public Set<String> cellNames() {
+        return new LinkedHashSet<>(namedRefs.keySet());
+    }
+
+    /** A copy of the name -> CellRef map (for XML serialization). */
+    public Map<String, CellRef> namedRefs() {
+        return new LinkedHashMap<>(namedRefs);
+    }
+
+    /** Replaces all named references (from a restored workbook) with cells. */
+    public void setNamedRefs(Map<String, CellRef> names) {
+        namedRefs.clear();
+        if (names != null) {
+            for (Map.Entry<String, CellRef> e : names.entrySet()) {
+                namedRefs.put(e.getKey(), e.getValue().normalize(sheetIndex()));
+            }
+        }
+        refreshNamedRefBindings();
+    }
+
+    /** The CellRect a range name resolves to (normalized to this sheet), or null. */
+    public CellRect namedRange(String name) {
+        CellRect rect = name == null ? null : namedRanges.get(name);
+        return rect == null ? null : rect.normalize(sheetIndex());
+    }
+
+    /** The name of the first named range containing the cell, or null. */
+    public String rangeNameContaining(int row, int col) {
+        CellRef target = new CellRef(sheetIndex(), row, col - 1);
+        for (Map.Entry<String, CellRect> e : namedRanges.entrySet()) {
+            if (e.getValue().normalize(sheetIndex()).contains(target)) {
+                return e.getKey();
+            }
+        }
+        return null;
+    }
+
+    /** All defined range-name values (insertion order). */
+    public Set<String> rangeNames() {
+        return new LinkedHashSet<>(namedRanges.keySet());
+    }
+
+    /** A copy of the name -> CellRect map (for XML serialization). */
+    public Map<String, CellRect> namedRanges() {
+        return new LinkedHashMap<>(namedRanges);
+    }
+
+    /** Replaces all named ranges (from a restored workbook). */
+    public void setNamedRanges(Map<String, CellRect> ranges) {
+        namedRanges.clear();
+        if (ranges != null) {
+            for (Map.Entry<String, CellRect> e : ranges.entrySet()) {
+                namedRanges.put(e.getKey(), e.getValue().normalize(sheetIndex()));
+            }
+        }
+        refreshNamedRefBindings();
+    }
+
+    /**
+     * Names the cell {@code (row, col)} or removes its name when {@code name} is
+     * blank. Names must be identifiers (letters, digits, underscore; not starting
+     * with a digit) and are unique: assigning a name moves it off any other cell,
+     * and naming a cell drops any older name it carried.
+     */
+    public void setCellName(int row, int col, String name) {
+        String nm = name == null ? "" : name.trim();
+        CellRef target = new CellRef(sheetIndex(), row, col - 1);
+        if (nm.isEmpty()) {
+            namedRefs.entrySet().removeIf(e -> e.getValue().equals(target));
+            refreshNamedRefBindings();
+            return;
+        }
+        if (!nm.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+            throw new IllegalArgumentException("Cell name '" + nm
+                    + "' must be an identifier (letters, digits or underscore, starting with a letter or underscore).");
+        }
+        namedRanges.remove(nm);             // a name belongs to one cell or one range
+        CellRef currentOwner = namedRefs.get(nm);
+        if (currentOwner != null && !currentOwner.equals(target)) {
+            namedRefs.remove(nm);           // move the name onto the target cell
+        }
+        namedRefs.entrySet().removeIf(e -> e.getValue().equals(target)); // drop the cell's older name
+        namedRefs.put(nm, target);
+        refreshNamedRefBindings();
+    }
+
+    /**
+     * Names the rectangular range between the two grid corners (rows 0-based,
+     * columns 1-based, inclusive) or removes that range's name when {@code name}
+     * is blank. Names must be identifiers and are unique across cells and
+     * ranges. The range is usable in formulas via {@code name[1,2]} (1-based
+     * indices) to read the value of a single cell inside the range.
+     */
+    public void setRangeName(int row0, int col1, int row1, int col2, String name) {
+        String nm = name == null ? "" : name.trim();
+        CellRect target = new CellRect(sheetIndex(), row0, col1 - 1, row1, col2 - 1);
+        if (nm.isEmpty()) {
+            namedRanges.entrySet().removeIf(e -> e.getValue().equals(target));
+            refreshNamedRefBindings();
+            return;
+        }
+        if (!nm.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+            throw new IllegalArgumentException("Range name '" + nm
+                    + "' must be an identifier (letters, digits or underscore, starting with a letter or underscore).");
+        }
+        namedRefs.remove(nm);               // a name belongs to one cell or one range
+        CellRect currentOwner = namedRanges.get(nm);
+        if (currentOwner != null && !currentOwner.equals(target)) {
+            namedRanges.remove(nm);         // move the name onto the target range
+        }
+        namedRanges.put(nm, target);
+        refreshNamedRefBindings();
+    }
+
+    /**
+     * Refreshes the live bindings behind every named cell reference so pasted
+     * expressions using a name always see the current value of the named cell.
+     * Called when bindings, cells or names change (currently from
+     * {@link #setBindingsText}, {@link #refreshSheetNameBindings},
+     * {@link #recomputeAll} and {@link #recomputeDependentsOnEdit}).
+     */
+    public void refreshNamedRefBindings() {
+        for (Map.Entry<String, CellRef> e : namedRefs.entrySet()) {
+            CellRef ref = e.getValue().normalize(sheetIndex());
+            if (ref.getSheet() != sheetIndex()) {
+                continue;
+            }
+            Cell c = cell(ref.getRow(), ref.getCol() + 1);
+            bindings.put(e.getKey(), c == null ? null : c.getValue());
+        }
+        for (Map.Entry<String, CellRect> e : namedRanges.entrySet()) {
+            CellRect rect = e.getValue().normalize(sheetIndex());
+            if (rect.getSheet() != sheetIndex()) {
+                continue;
+            }
+            bindings.put(e.getKey(), new RangeBinding(rect));
+        }
+    }
+
+    /** Live array-like view over a named range; indices are 1-based. */
+    private final class RangeBinding implements RangeValue {
+        private final CellRect rect;   // normalized to this sheet
+
+        RangeBinding(CellRect rect) {
+            this.rect = rect;
+        }
+
+        @Override
+        public int rows() {
+            return rect.rows();
+        }
+
+        @Override
+        public int cols() {
+            return rect.cols();
+        }
+
+        @Override
+        public Object get(int row, int col) {
+            int r = rect.getRow0() + row - 1;
+            int gcol = rect.getCol0() + col;   // absolute 1-based grid column
+            if (r < rect.getRow0() || r > rect.getRow1()
+                    || gcol < rect.getCol0() + 1 || gcol > rect.getCol1() + 1) {
+                return null;
+            }
+            Cell c = cell(r, gcol);
+            return c == null || c.isEmpty() ? null : c.getValue();
         }
     }
 
@@ -182,6 +424,14 @@ public class Sheet implements CellProvider {
     private void pruneOutOfRange(int rows, int cols) {
         formatPatterns.keySet().removeIf(k -> !inside(k, rows, cols));
         alignments.keySet().removeIf(k -> !inside(k, rows, cols));
+        namedRefs.entrySet().removeIf(e -> {
+            CellRef r = e.getValue();
+            return r.getRow() >= rows || r.getCol() >= cols;
+        });
+        namedRanges.entrySet().removeIf(e -> {
+            CellRect r = e.getValue();
+            return r.getRow1() >= rows || r.getCol1() >= cols;
+        });
     }
 
     /** Whether a stored cell key "S#(r,c)" still fits inside rows x cols (1-based r,c). */
@@ -207,6 +457,8 @@ public class Sheet implements CellProvider {
         cellMap.keySet().removeIf(k -> k.startsWith(prefix));
         formatPatterns.keySet().removeIf(k -> k.startsWith(prefix));
         alignments.keySet().removeIf(k -> k.startsWith(prefix));
+        namedRefs.clear();
+        namedRanges.clear();
     }
 
     @Override
@@ -239,10 +491,21 @@ public class Sheet implements CellProvider {
     }
 
     public void setRawValue(int row, int col, String value) {
+        String v = String.valueOf(value).trim();
         if (col > 0 && row >= 0 && row < cells.length) {
             String[] src = cells[row];
             if (src != null && col - 1 < src.length) {
-                src[col - 1] = String.valueOf(value).trim();
+                src[col - 1] = v;
+            }
+        }
+        // Keep a registered literal cell in sync with the new raw text: naming a
+        // cell before entering its value (setCellName then setRawValue) would
+        // otherwise leave a stale empty Cell behind. Formula cells are handled by
+        // the recompute machinery, so they are deliberately left untouched.
+        if (col > 0) {
+            Cell registered = registeredCell(row, col);
+            if (registered != null && registered.getExpression() == null) {
+                registered.updateValue(v);
             }
         }
     }
@@ -318,6 +581,9 @@ public class Sheet implements CellProvider {
                 normalized.add(rawRef.normalize(sheetIndex()));
             }
         }
+        // Named cell references used inside the expression are dependencies too:
+        // get('Name') and bare Name both add the named cell to the ref set.
+        addNamedRefs(node, normalized);
         saved.setReferenced(normalized);
         Cell prev = cellMap.get(cellKey(sheetIndex(), row, col));
         if (prev != null) {
@@ -348,6 +614,61 @@ public class Sheet implements CellProvider {
         return s == null ? "" : s.getRawValue(ref.getRow(), ref.getCol() + 1);
     }
 
+    /**
+     * Adds the CellRefs behind every named cell reference used in the node tree:
+     * {@code get('Name')} calls and bare {@code Name} variables. The named cell
+     * is then tracked as a dependent so editing it recalculates the formula.
+     */
+    private void addNamedRefs(Node n, Set<CellRef> out) {
+        if (n == null) {
+            return;
+        }
+        if (n instanceof FunctionNode f) {
+            if (f.getName().equalsIgnoreCase("get") && f.getParams().size() == 1) {
+                Node arg = f.getParams().get(0);
+                if (arg instanceof ConstantNode cn && cn.getType() == DataType.STRING) {
+                    CellRef ref = namedRefs.get(EvalUtil.asString(cn.getValue()));
+                    if (ref != null) {
+                        out.add(ref.normalize(sheetIndex()));
+                    }
+                }
+            }
+            for (Node p : f.getParams()) {
+                addNamedRefs(p, out);
+            }
+        } else if (n instanceof IfNode i) {
+            addNamedRefs(i.getCondition(), out);
+            addNamedRefs(i.getWhenTrue(), out);
+            addNamedRefs(i.getWhenFalse(), out);
+        } else if (n instanceof UnaryNode u) {
+            addNamedRefs(u.getChild(), out);
+        } else if (n instanceof BinaryNode b) {
+            addNamedRefs(b.getLeft(), out);
+            addNamedRefs(b.getRight(), out);
+        } else if (n instanceof OperationsNode on) {
+            for (Node c : on.getChildren()) {
+                addNamedRefs(c, out);
+            }
+        } else if (n instanceof ArrayAccessNode aa) {
+            CellRect range = namedRanges.get(aa.getName());
+            if (range != null) {
+                CellRect nr = range.normalize(sheetIndex());
+                for (int r = nr.getRow0(); r <= nr.getRow1(); r++) {
+                    for (int c = nr.getCol0(); c <= nr.getCol1(); c++) {
+                        out.add(new CellRef(nr.getSheet(), r, c));
+                    }
+                }
+            }
+            addNamedRefs(aa.getRowExpr(), out);
+            addNamedRefs(aa.getColExpr(), out);
+        } else if (n instanceof VariableNode v) {
+            CellRef ref = namedRefs.get(v.getName());
+            if (ref != null) {
+                out.add(ref.normalize(sheetIndex()));
+            }
+        }
+    }
+
     public void recomputeDependentsOnEdit(int row, int col, Map<String, Object> bindings, FunctionRegistry registry) {
         CellRef self = new CellRef(sheetIndex(), row, col - 1);
         recomputeDependents(self, bindings, registry);
@@ -355,6 +676,7 @@ public class Sheet implements CellProvider {
 
     public void recomputeDependentsOnEdit(int row, int col) {
         CellRef self = new CellRef(sheetIndex(), row, col - 1);
+        refreshNamedRefBindings();
         recomputeDependents(self, bindings, registry);
     }
 
@@ -389,6 +711,7 @@ public class Sheet implements CellProvider {
 
     /** Recomputes every registered cell that carries an expression tree. */
     public void recomputeAll() {
+        refreshNamedRefBindings();
         for (int r = 0; r < rows(); r++) {
             for (int c = 1; c <= cols(); c++) {
                 Cell cell = registeredCell(r, c);

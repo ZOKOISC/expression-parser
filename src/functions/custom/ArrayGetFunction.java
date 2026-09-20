@@ -2,6 +2,7 @@ package functions.custom;
 
 import java.util.List;
 
+import expr.CellRef;
 import expr.ConstantNode;
 import expr.DataType;
 import expr.EvalUtil;
@@ -62,16 +63,31 @@ public class ArrayGetFunction implements Function {
 
     @Override
     public boolean acceptsParameterCount(int count) {
-        return count == 2 || count == 3;
+        return count == 1 || count == 2 || count == 3;
     }
 
     @Override
     public String parameterCountDescription() {
-        return "2 or 3 parameter(s)";
+        return "1 (named reference), 2 or 3";
     }
 
     @Override
     public DataType resolveReturnType(List<Node> params) {
+        // Single-argument form: get('Name') resolves a named cell reference.
+        if (params.size() == 1) {
+            if (params.get(0) instanceof ConstantNode nameCn
+                    && nameCn.getType() == DataType.STRING
+                    && provider instanceof Sheet s) {
+                CellRef ref = s.namedRef(EvalUtil.asString(nameCn.getValue()));
+                if (ref != null) {
+                    Cell cell = s.cell(ref.getRow(), ref.getCol() + 1);
+                    if (cell != null && !cell.isEmpty()) {
+                        return cell.getType();
+                    }
+                }
+            }
+            return DataType.ANY;
+        }
         Node sheetArg = null;
         int rowIdx;
         int colIdx;
@@ -110,6 +126,26 @@ public class ArrayGetFunction implements Function {
 
     @Override
     public Object evaluate(List<Object> params) {
+        // Single-argument form: get('Name') resolves a named cell reference on
+        // the sheet this function is bound to, returning the cell's live value.
+        if (params.size() == 1) {
+            if (!(provider instanceof Sheet sheet)) {
+                Warnings.add("get(name): named cell references require a sheet-backed registry.");
+                return null;
+            }
+            String name = EvalUtil.asString(params.get(0));
+            CellRef ref = sheet.namedRef(name);
+            if (ref == null) {
+                Warnings.add("get('" + name + "'): no such named cell reference.");
+                return null;
+            }
+            Cell cell = sheet.cell(ref.getRow(), ref.getCol() + 1);
+            if (cell == null || cell.isEmpty()) {
+                Warnings.add("get('" + name + "'): the named cell is empty.");
+                return null;
+            }
+            return cell.getValue();
+        }
         if (params.size() >= 3) {
             long sheetIdx = Math.round(EvalUtil.asDouble(params.get(0))) - 1;
             if (book == null || sheetIdx < 0 || sheetIdx >= book.size()) {

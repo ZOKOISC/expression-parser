@@ -4,7 +4,9 @@ import java.io.ByteArrayInputStream;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -18,6 +20,8 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
+import expr.CellRect;
+import expr.CellRef;
 import expr.DataType;
 
 /**
@@ -28,12 +32,16 @@ import expr.DataType;
  */
 public final class WorkbookIO {
 
-    /** One restored sheet: dimensions plus its restored cells. */
+    /** One restored sheet: dimensions, named references plus its restored cells. */
     public static final class LoadedSheet {
         public final int rows;
         public final int cols;
         public String name;
         public final List<LoadedCell> cells = new ArrayList<>();
+        /** Named cell references restored from the XML: name -> CellRef (0-based, sheet 0). */
+        public final Map<String, CellRef> names = new LinkedHashMap<>();
+        /** Named rectangular ranges restored from the XML: name -> CellRect (0-based, sheet 0). */
+        public final Map<String, CellRect> ranges = new LinkedHashMap<>();
 
         public LoadedSheet(int rows, int cols) {
             this.rows = rows;
@@ -127,6 +135,30 @@ public final class WorkbookIO {
                         sheetEl.appendChild(cellEl);
                     }
                 }
+                Element namesEl = doc.createElement("names");
+                boolean anyNames = false;
+                for (Map.Entry<String, CellRef> e : sheet.namedRefs().entrySet()) {
+                    Element nameEl = doc.createElement("named");
+                    nameEl.setAttribute("ref", e.getKey());
+                    nameEl.setAttribute("row", String.valueOf(e.getValue().getRow() + 1));
+                    nameEl.setAttribute("col", String.valueOf(e.getValue().getCol() + 1));
+                    namesEl.appendChild(nameEl);
+                    anyNames = true;
+                }
+                for (Map.Entry<String, CellRect> e : sheet.namedRanges().entrySet()) {
+                    CellRect r = e.getValue().normalize(sheet.sheetIndex());
+                    Element nameEl = doc.createElement("named");
+                    nameEl.setAttribute("ref", e.getKey());
+                    nameEl.setAttribute("row", String.valueOf(r.getRow0() + 1));
+                    nameEl.setAttribute("col", String.valueOf(r.getCol0() + 1));
+                    nameEl.setAttribute("row2", String.valueOf(r.getRow1() + 1));
+                    nameEl.setAttribute("col2", String.valueOf(r.getCol1() + 1));
+                    namesEl.appendChild(nameEl);
+                    anyNames = true;
+                }
+                if (anyNames) {
+                    sheetEl.appendChild(namesEl);
+                }
                 sheetsEl.appendChild(sheetEl);
             }
 
@@ -163,6 +195,23 @@ public final class WorkbookIO {
                     int cols = intAttr(sheetEl, "cols");
                     LoadedSheet ls = new LoadedSheet(rows, cols);
                     ls.name = strAttr(sheetEl, "name");
+                    NodeList nameNodes = sheetEl.getElementsByTagName("named");
+                    for (int j = 0; j < nameNodes.getLength(); j++) {
+                        Element nameEl = (Element) nameNodes.item(j);
+                        String ref = strAttr(nameEl, "ref");
+                        if (ref == null) {
+                            continue;
+                        }
+                        if (nameEl.hasAttribute("row2")) {
+                            ls.ranges.put(ref, new CellRect(0,
+                                    intAttr(nameEl, "row") - 1,
+                                    intAttr(nameEl, "col") - 1,
+                                    intAttr(nameEl, "row2") - 1,
+                                    intAttr(nameEl, "col2") - 1));
+                        } else {
+                            ls.names.put(ref, new CellRef(0, intAttr(nameEl, "row") - 1, intAttr(nameEl, "col") - 1));
+                        }
+                    }
                     NodeList cellNodes = sheetEl.getElementsByTagName("cell");
                     for (int j = 0; j < cellNodes.getLength(); j++) {
                         Element cellEl = (Element) cellNodes.item(j);

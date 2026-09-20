@@ -1,4 +1,5 @@
 import java.awt.BorderLayout;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -70,6 +71,10 @@ public class BookGui {
     private JFrame frame;
     /** Folder the current workbook was loaded from (save dialog starts here). */
     private File currentDir;
+    /** Tab being dragged when reordering sheets; -1 when idle. */
+    private int dragFrom = -1;
+    /** Tab index currently held by the drag-to-reorder gesture, or -1. */
+    private int dragTab = -1;
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(BookGui::new);
@@ -85,6 +90,17 @@ public class BookGui {
      * embedded in the library so closing it does not exit the JVM.
      */
     public BookGui(File openFile, boolean exitOnClose) {
+        this(openFile, exitOnClose, "Sheet GUI");
+    }
+
+    /**
+     * Same as the basic constructor but lets the caller choose the window
+     * title (used by the library so the editor is titled after the book).
+     */
+    private String bookName = "Sheet GUI";
+
+    public BookGui(File openFile, boolean exitOnClose, String windowTitle) {
+        this.bookName = windowTitle == null ? "Sheet GUI" : windowTitle;
         buildUi();
         if (exitOnClose) {
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -167,7 +183,42 @@ public class BookGui {
             }
         });
 
-        JFrame frame = new JFrame("Sheet GUI");
+        // Drag a sheet tab to another position to reorder the sheets as they
+        // are displayed. This is display-only: it moves the tab and the parallel
+        // display list, never the SheetBook, whose list order *is* the stable
+        // slot id behind each sheet. References from other sheets always keep
+        // resolving to the same sheet.
+        tabs.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.getButton() != MouseEvent.BUTTON1) {
+                    return;
+                }
+                dragFrom = tabs.indexAtLocation(e.getX(), e.getY());
+                if (dragFrom >= 0) {
+                    tabs.setSelectedIndex(dragFrom);
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                dragFrom = -1;
+            }
+        });
+        tabs.addMouseMotionListener(new MouseAdapter() {
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                if (dragFrom >= 0) {
+                    int target = tabs.indexAtLocation(e.getX(), e.getY());
+                    if (target >= 0 && target != dragFrom) {
+                        moveSheetTab(dragFrom, target);
+                        dragFrom = target;
+                    }
+                }
+            }
+        });
+
+        JFrame frame = new JFrame(bookName);
         this.frame = frame;
         frame.setJMenuBar(menuBar);
         frame.setLayout(new BorderLayout());
@@ -313,6 +364,29 @@ public class BookGui {
         sheets.remove(idx);
         book.remove(idx);
         setStatus("Sheet deleted.");
+    }
+
+    /**
+     * Reorders a displayed sheet tab from {@code from} to {@code to} without
+     * touching the SheetBook. The parallel display list {@code sheets} is moved
+     * along with the tab so tab order, cursor and display stay in sync; the
+     * book's list order is left alone because it *is* the stable slot id behind
+     * each sheet, and references from other sheets keep resolving to the same
+     * sheet whichever way the tabs are dragged.
+     */
+    private void moveSheetTab(int from, int to) {
+        if (from < 0 || from >= sheets.size() || to < 0 || to >= sheets.size()
+                || from == to) {
+            return;
+        }
+        SheetView v = sheets.remove(from);
+        sheets.add(to, v);
+
+        String title = tabs.getTitleAt(from);
+        Component comp = tabs.getComponentAt(from);
+        tabs.removeTabAt(from);
+        tabs.insertTab(title, null, comp, null, to);
+        tabs.setSelectedIndex(to);
     }
 
     private void doRenameSheet() {
@@ -510,6 +584,8 @@ public class BookGui {
                     v.sheet.restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
                             lc.type, lc.formatPattern, lc.alignment);
                 }
+                v.sheet.setNamedRefs(ls.names);
+                v.sheet.setNamedRanges(ls.ranges);
             }
             for (SheetView v : sheets) {
                 v.sheet.setBindingsText(varsArea.getText());

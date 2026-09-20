@@ -1,20 +1,72 @@
 package functions.custom;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.HashSet;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+
+import expr.CellRef;
 
 /**
  * The ordered set of sheets of one workbook. Owns the single cell map shared by
  * all sheets; every key always contains the sheet index. Slots are never
  * renumbered: deleting a sheet keeps its slot (the sheet is closed) so that
  * indices referenced by other sheets stay valid.
+ *
+ * <p>This class is also the workbook-level context holder used by the
+ * {@code row()}, {@code col()} and {@code sheetNdx()} functions. During a
+ * recalculation pass the cell being evaluated is published via
+ * {@link #setCurrentCell(CellRef)} so single-cell functions can report the
+ * current position; sheet-referencing {@code get(sheetNdx(...), ...)} uses the
+ * visual (tab) order kept here via {@link #setVisualOrder(List)}.</p>
  */
 public class SheetBook {
 
     private final List<Sheet> sheets = new ArrayList<>();
+    private final List<Sheet> visualOrder = new ArrayList<>();
     private final Map<String, Cell> cellMap = new LinkedHashMap<>();
+    private CellRef currentCell;
+
+    /** The cell currently being evaluated during a recalculation pass, or null. */
+    public CellRef currentCell() {
+        return currentCell;
+    }
+
+    /** Publishes the cell being evaluated; used by row()/col() during recalc. */
+    public void setCurrentCell(CellRef ref) {
+        this.currentCell = ref;
+    }
+
+    /** The tab-visible order of the sheets (possibly differing from slot order). */
+    public List<Sheet> visualOrder() {
+        return visualOrder;
+    }
+
+    /** Replaces the visual order (kept in sync by the GUI when tabs are dragged). */
+    public void setVisualOrder(List<Sheet> order) {
+        visualOrder.clear();
+        if (order != null) {
+            for (Sheet s : order) {
+                if (s != null && !visualOrder.contains(s)) {
+                    visualOrder.add(s);
+                }
+            }
+        }
+    }
+
+    /** 0-based visual index of the given sheet, or -1 if not present. */
+    public int visualIndexOf(Sheet sheet) {
+        return visualOrder.indexOf(sheet);
+    }
+
+    /** The sheet at the given 0-based visual position, or null. */
+    public Sheet sheetAtVisual(int index) {
+        return index >= 0 && index < visualOrder.size() ? visualOrder.get(index) : null;
+    }
 
     public Map<String, Cell> cellMap() {
         return cellMap;

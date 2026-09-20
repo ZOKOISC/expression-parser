@@ -239,7 +239,7 @@ Path file = Path.of(library.defaultFolder()).resolve(book.fileName());
             showError(new java.io.IOException("Missing book file: " + file));
             return;
         }
-        SwingUtilities.invokeLater(() -> new BookGui(file.toFile(), false));
+        SwingUtilities.invokeLater(() -> new BookGui(file.toFile(), false, book.name));
         setStatus("Opened '" + book.name + "' for editing.");
     }
 

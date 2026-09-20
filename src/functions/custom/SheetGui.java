@@ -1,0 +1,687 @@
+package functions.custom;
+
+import java.awt.BorderLayout;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.Frame;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.text.DecimalFormat;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JFileChooser;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JMenu;
+import javax.swing.JMenuBar;
+import javax.swing.JMenuItem;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
+import javax.swing.JScrollPane;
+import javax.swing.JTable;
+import javax.swing.JTextArea;
+import javax.swing.JTextField;
+import javax.swing.KeyStroke;
+import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
+import javax.swing.event.TableModelEvent;
+import javax.swing.table.DefaultTableCellRenderer;
+
+import expr.DataType;
+import functions.MathFunctions;
+
+/**
+ * Standalone single-sheet GUI: one SheetView (Sheet + ArrayModel + JTable), a
+ * MathFunctions registry installed on the single sheet, an editable 3 x 3 grid,
+ * Open/Save XML buttons and CellDialog editing. Open/Save reuse
+ * {@link WorkbookIO#toXml}/{@link WorkbookIO#fromXml} and
+ * {@link Sheet#restoreCell} exactly as {@code BookGui.loadWorkbook} does, so
+ * files written here open unchanged in the multi-sheet editor and vice versa.
+ *
+ * <p>Run with: {@code java -cp out functions.custom.SheetGui}</p>
+ */
+public class SheetGui {
+
+    /** One single sheet: the Sheet, its table model and the JTable. */
+    private static class SheetView {
+        final Sheet sheet = new Sheet();
+        final ArrayModel model = new ArrayModel(sheet);
+        final JTable grid = new JTable(model);
+        /** Cell where the last plain left-button drag started; -1 when inactive. */
+        int dragAnchorRow = -1;
+        int dragAnchorCol = -1;
+    }
+
+    private SheetView view;
+    private SheetBook book = new SheetBook();
+    private final JTextArea varsArea = new JTextArea(5, 40);
+    private final JLabel status = new JLabel(" ");
+    private final JLabel typeLabel = new JLabel(" ");
+    private final JTextField rowsField = new JTextField("3", 3);
+    private final JTextField colsField = new JTextField("3", 3);
+    private final JScrollPane gridPane = new JScrollPane();
+    private JFrame frame;
+    /** Folder the current workbook was loaded from (save dialog starts here). */
+    private File currentDir;
+    /** XML file the current content was loaded from or saved to, or null. */
+    private Path currentFile;
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(SheetGui::new);
+    }
+
+    public SheetGui() {
+        this(true);
+    }
+
+    /**
+     * {@code exitOnClose} true makes closing the window exit the JVM (standalone
+     * launch); false disposes just the window, letting an embedding program (for
+     * example the extended sheet API) continue after the GUI closes.
+     */
+    public SheetGui(boolean exitOnClose) {
+        buildUi();
+        frame.setDefaultCloseOperation(exitOnClose ? JFrame.EXIT_ON_CLOSE : JFrame.DISPOSE_ON_CLOSE);
+        Path remembered = Library.rememberedLibraryFolder();
+        currentDir = remembered != null ? remembered.toFile() : null;
+    }
+
+    private void buildUi() {
+        Font mono = new Font(Font.MONOSPACED, Font.PLAIN, 13);
+
+        varsArea.setFont(mono);
+        varsArea.setText("x = 4");
+
+        view = createSheetView();
+        view.model.setSheetSize(3, 3);
+        installRenderers(view);
+        view.sheet.loadDefaults();
+        resizeRowNumberColumn(view.grid, 3);
+
+        JPanel varsPanel = new JPanel(new BorderLayout());
+        varsPanel.setBorder(BorderFactory.createTitledBorder("Variables (name = value, one per line)"));
+        JScrollPane varsScroll = new JScrollPane(varsArea);
+        varsScroll.setPreferredSize(new Dimension(600, 70));
+        varsPanel.add(varsScroll, BorderLayout.CENTER);
+
+        JPanel arrayControls = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        arrayControls.add(new JLabel("Grid size: rows"));
+        rowsField.setFont(mono);
+        colsField.setFont(mono);
+        arrayControls.add(rowsField);
+        arrayControls.add(new JLabel("columns"));
+        arrayControls.add(colsField);
+        JButton btnResize = new JButton("Resize Grid");
+        JButton btnSave = new JButton("Save XML");
+        JButton btnOpen = new JButton("Open XML");
+        JButton btnNames = new JButton("Named cells");
+        arrayControls.add(btnResize);
+        arrayControls.add(btnSave);
+        arrayControls.add(btnOpen);
+        arrayControls.add(btnNames);
+        typeLabel.setFont(mono);
+        arrayControls.add(typeLabel);
+
+        JFrame frame = new JFrame("Sheet GUI");
+        this.frame = frame;
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setJMenuBar(buildMenuBar());
+        frame.setLayout(new BorderLayout());
+        JPanel north = new JPanel(new BorderLayout());
+        north.add(varsPanel, BorderLayout.CENTER);
+        north.add(arrayControls, BorderLayout.SOUTH);
+        frame.add(north, BorderLayout.NORTH);
+
+        gridPane.setViewportView(view.grid);
+        gridPane.setPreferredSize(new Dimension(600, 300));
+        frame.add(gridPane, BorderLayout.CENTER);
+        frame.add(status, BorderLayout.SOUTH);
+        frame.setSize(700, 560);
+        frame.setLocationRelativeTo(null);
+        frame.setVisible(true);
+
+        btnResize.addActionListener(e -> doResizeGrid());
+        btnSave.addActionListener(e -> doSaveXml());
+        btnOpen.addActionListener(e -> doOpenXml());
+        btnNames.addActionListener(e -> openNamedCellsPopup());
+    }
+
+    /**
+     * Builds the File menu: Open/Save/Save As XML, all with keyboard
+     * accelerators and wired to the same handlers as the toolbar buttons.
+     */
+    private JMenuBar buildMenuBar() {
+        JMenuBar menuBar = new JMenuBar();
+        JMenu fileMenu = new JMenu("File");
+        JMenuItem itemSave = new JMenuItem("Save XML");
+        JMenuItem itemSaveAs = new JMenuItem("Save As...");
+        JMenuItem itemOpen = new JMenuItem("Open XML");
+        itemSave.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK));
+        itemSaveAs.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S,
+                InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
+        itemOpen.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_DOWN_MASK));
+        fileMenu.add(itemSave);
+        fileMenu.add(itemSaveAs);
+        fileMenu.addSeparator();
+        fileMenu.add(itemOpen);
+        menuBar.add(fileMenu);
+        itemSave.addActionListener(e -> doSaveXml());
+        itemSaveAs.addActionListener(e -> doSaveXmlAs());
+        itemOpen.addActionListener(e -> doOpenXml());
+        return menuBar;
+    }
+
+    /**
+     * Builds the single SheetView: adds the sheet to the book, installs the
+     * MathFunctions registry (plus the sheet's get/row/col functions), wires the
+     * table-model listener that recomputes dependents on every edit, and hooks
+     * the grid's popup menu and double-click CellDialog editing.
+     */
+    private SheetView createSheetView() {
+        SheetView v = new SheetView();
+        book.add(v.sheet);
+        v.sheet.install(MathFunctions.createRegistry());
+        v.grid.setFillsViewportHeight(true);
+        // Cell-click selects the clicked cell only; whole rows/columns are
+        // selected via the row-number column and the column headers instead.
+        v.grid.setCellSelectionEnabled(true);
+        v.grid.getTableHeader().setReorderingAllowed(false);
+        v.grid.getModel().addTableModelListener(e -> {
+            if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
+                Cell cell = v.sheet.handleCellUpdate(e.getFirstRow(), e.getColumn(),
+                        v.sheet.getRawValue(e.getFirstRow(), e.getColumn()));
+                typeLabel.setText(cell.isEmpty() ? " " : "Cell (" + (e.getFirstRow() + 1) + ","
+                        + e.getColumn() + ") type: " + cell.getType().name());
+                recomputeDependentsOnEdit(v, e.getFirstRow(), e.getColumn());
+            }
+        });
+        v.grid.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger()) {
+                    showCellMenu(v, e);
+                } else if (e.getButton() == MouseEvent.BUTTON1) {
+                    int row = v.grid.rowAtPoint(e.getPoint());
+                    int col = v.grid.columnAtPoint(e.getPoint());
+                    if (row >= 0 && row < v.sheet.rows() && col >= 0 && col <= v.sheet.cols()) {
+                        if (col == 0) {
+                            v.dragAnchorRow = -1;   // whole-row select: no drag range
+                            selectWholeRow(v, row);
+                        } else {
+                            selectSingleCell(v, row, col, e.isControlDown(), e.isShiftDown());
+                            if (!e.isControlDown() && !e.isShiftDown()) {
+                                v.dragAnchorRow = row;   // possible rectangular drag
+                                v.dragAnchorCol = col;
+                            } else {
+                                v.dragAnchorRow = -1;
+                            }
+                        }
+                    }
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger()) showCellMenu(v, e);
+                if (e.getButton() == MouseEvent.BUTTON1) {
+                    v.dragAnchorRow = -1;
+                    v.dragAnchorCol = -1;
+                }
+            }
+
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() >= 2 && e.getButton() == MouseEvent.BUTTON1 && !e.isPopupTrigger()) {
+                    int row = v.grid.rowAtPoint(e.getPoint());
+                    int col = v.grid.columnAtPoint(e.getPoint());
+                    if (row >= 0 && col > 0 && row < v.sheet.rows() && col <= v.sheet.cols()) {
+                        showEditDialog(v, row, col, v.sheet.cell(row, col));
+                    }
+                }
+            }
+        });
+        // Dragging the mouse over data cells extends the selection to a rectangle.
+        v.grid.addMouseMotionListener(new MouseAdapter() {
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                if (v.dragAnchorRow < 0
+                        || (e.getModifiersEx() & MouseEvent.BUTTON1_DOWN_MASK) == 0) {
+                    return;
+                }
+                int row = v.grid.rowAtPoint(e.getPoint());
+                int col = v.grid.columnAtPoint(e.getPoint());
+                if (row < 0 || row >= v.sheet.rows()) {
+                    return;
+                }
+                if (col < 1) {
+                    col = 1;                       // drag over the row-number column: clamp
+                } else if (col > v.sheet.cols()) {
+                    col = v.sheet.cols();
+                }
+                v.grid.setCellSelectionEnabled(true);
+                v.grid.changeSelection(row, col, false, true);   // extend to a rectangle
+            }
+        });
+        v.grid.getTableHeader().addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.getButton() != MouseEvent.BUTTON1) {
+                    return;
+                }
+                int col = v.grid.getTableHeader().columnAtPoint(e.getPoint());
+                if (col > 0 && col <= v.sheet.cols()) {
+                    selectWholeColumn(v, col);
+                }
+            }
+        });
+        return v;
+    }
+
+    /** Clicking a data cell selects just that cell (JTable defaults to rows). */
+    private static void selectSingleCell(SheetView v, int row, int col, boolean toggle, boolean extend) {
+        v.grid.setCellSelectionEnabled(true);
+        v.grid.changeSelection(row, col, toggle, extend);
+    }
+
+    /** Clicking the row number (column 0) selects the whole row. */
+    private static void selectWholeRow(SheetView v, int row) {
+        v.grid.setRowSelectionAllowed(true);
+        v.grid.setColumnSelectionAllowed(false);
+        v.grid.getSelectionModel().setSelectionInterval(row, row);
+    }
+
+    /** Clicking a column header (the column number) selects the whole column. */
+    private static void selectWholeColumn(SheetView v, int col) {
+        v.grid.setRowSelectionAllowed(false);
+        v.grid.setColumnSelectionAllowed(true);
+        v.grid.getColumnModel().getSelectionModel().setSelectionInterval(col, col);
+    }
+
+    /** Renders cell values applying the cell's format pattern and alignment. */
+    private static class FormatCellRenderer extends DefaultTableCellRenderer {
+        private final SheetView view;
+
+        FormatCellRenderer(SheetView view) {
+            this.view = view;
+        }
+
+        @Override
+        public java.awt.Component getTableCellRendererComponent(JTable table, Object value,
+                boolean isSelected, boolean hasFocus, int row, int column) {
+            super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+            if (column > 0) {
+                Cell cell = view.sheet.cell(row, column);
+                String pat = cell.getFormatPattern();
+                Object val = cell.getValue();
+                if (pat != null && !pat.isEmpty()) {
+                    try {
+                        if (val instanceof LocalDate d) {
+                            setText(d.format(DateTimeFormatter.ofPattern(pat)));
+                        } else if (val instanceof LocalDateTime dt) {
+                            setText(dt.format(DateTimeFormatter.ofPattern(pat)));
+                        } else if (val instanceof LocalTime t) {
+                            setText(t.format(DateTimeFormatter.ofPattern(pat)));
+                        } else if (val instanceof Number n) {
+                            setText(new DecimalFormat(pat).format(n));
+                        }
+                    } catch (Exception ignored) {
+                        // pattern not applicable; keep default label text
+                    }
+                }
+                String al = cell.getHorizontalAlignment();
+                int swingAlign;
+                if (al != null) {
+                    if ("Right".equalsIgnoreCase(al)) {
+                        swingAlign = SwingConstants.RIGHT;
+                    } else if ("Center".equalsIgnoreCase(al)) {
+                        swingAlign = SwingConstants.CENTER;
+                    } else {
+                        swingAlign = SwingConstants.LEFT;
+                    }
+                } else {
+                    DataType dt = cell.getType();
+                    if (dt == DataType.NUMERIC) {
+                        swingAlign = SwingConstants.RIGHT;
+                    } else if (dt == DataType.STRING) {
+                        swingAlign = SwingConstants.LEFT;
+                    } else {
+                        swingAlign = SwingConstants.CENTER;
+                    }
+                }
+                setHorizontalAlignment(swingAlign);
+            } else {
+                setHorizontalAlignment(SwingConstants.CENTER);
+            }
+            return this;
+        }
+    }
+
+    private static void installRenderers(SheetView v) {
+        FormatCellRenderer renderer = new FormatCellRenderer(v);
+        v.grid.setDefaultRenderer(Object.class, renderer);
+        for (int i = 1; i <= v.sheet.cols(); i++) {
+            v.grid.getColumnModel().getColumn(i).setCellRenderer(renderer);
+        }
+    }
+
+    private void doResizeGrid() {
+        try {
+            int rows = Integer.parseInt(rowsField.getText().trim());
+            int cols = Integer.parseInt(colsField.getText().trim());
+            if (rows < 1 || cols < 1 || rows > 100 || cols > 100) {
+                throw new IllegalArgumentException("Rows and columns must be between 1 and 100.");
+            }
+            int lost = view.sheet.lostCellsIfResizedTo(rows, cols);
+            if (lost > 0) {
+                int choice = JOptionPane.showConfirmDialog(
+                        frame,
+                        "Resizing the grid to " + rows + " rows x " + cols + " columns would discard " + lost
+                                + " cell" + (lost == 1 ? "" : "s") + " that lie outside the new bounds.\n\n"
+                                + "Resize anyway?",
+                        "Resize grid - discarding used cells", JOptionPane.YES_NO_OPTION);
+                if (choice != JOptionPane.YES_OPTION) {
+                    setStatus("Resize cancelled - the grid still has " + view.sheet.rows() + " x "
+                            + view.sheet.cols() + " cells.");
+                    return;
+                }
+            }
+            view.model.setSheetSize(rows, cols);
+            installRenderers(view);
+            resizeRowNumberColumn(view.grid, rows);
+            setStatus("Grid resized: " + rows + "x" + cols + ". Fill the cells and use get(row,col).");
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    private void showCellMenu(SheetView v, MouseEvent e) {
+        int row = v.grid.rowAtPoint(e.getPoint());
+        int col = v.grid.columnAtPoint(e.getPoint());
+        if (row < 0 || col <= 0) return;
+        Cell cell = v.sheet.cell(row, col);
+        JPopupMenu menu = new JPopupMenu();
+        JMenu typeMenu = new JMenu("Convert type");
+        for (DataType dt : DataType.values()) {
+            if (dt == DataType.ANY || dt == cell.getType()) continue;
+            JMenuItem item = new JMenuItem(dt.name());
+            item.addActionListener(ev -> {
+                try {
+                    v.sheet.convertCell(row, col, dt);
+                    v.grid.repaint();
+                } catch (Exception ex) {
+                    showError(ex);
+                }
+            });
+            typeMenu.add(item);
+        }
+        menu.add(typeMenu);
+        JMenuItem editCell = new JMenuItem("Edit cell content...");
+        editCell.addActionListener(ev -> showEditDialog(v, row, col, cell));
+        menu.add(editCell);
+        JMenuItem namedCells = new JMenuItem("Named cells…");
+        namedCells.addActionListener(ev -> openNamedCellsPopup(row, col));
+        menu.add(namedCells);
+        JMenuItem setFormat = new JMenuItem("Set format pattern…");
+        setFormat.addActionListener(ev -> {
+            String pat = JOptionPane.showInputDialog(v.grid,
+                    "Enter Java format pattern (e.g. #,##0.00, yyyy-MM-dd, HH:mm):",
+                    v.sheet.getFormatPattern(row, col) == null ? "" : v.sheet.getFormatPattern(row, col));
+            if (pat != null) {
+                v.sheet.setFormatPattern(row, col, pat);
+                v.grid.repaint();
+            }
+        });
+        menu.add(setFormat);
+        JMenuItem clear = new JMenuItem("Clear cell");
+        clear.addActionListener(ev -> {
+            try {
+                v.sheet.clearCell(row, col);
+            } catch (Exception ex) {
+                showError(ex);
+            }
+        });
+        menu.add(clear);
+        JMenuItem recompute = new JMenuItem("Recompute dependents");
+        recompute.addActionListener(ev -> recomputeDependentsOnEdit(v, row, col));
+        menu.add(recompute);
+        menu.show(v.grid, e.getX(), e.getY());
+    }
+
+    /**
+     * Opens the "Named cells" manager. The cell currently selected in the grid
+     * (if any) becomes the default cell for adding/positioning in the dialog.
+     */
+    private void openNamedCellsPopup() {
+        int[] sel = currentGridSelection();
+        openNamedCellsPopup(sel == null ? -1 : sel[0], sel == null ? -1 : sel[1]);
+    }
+
+    /**
+     * Opens the "Named cells" manager; if the given cell is already named the
+     * list is positioned on it, otherwise the dialog offers to name it.
+     *
+     * @param defaultRow  active grid row (0-based), or -1 for none
+     * @param defaultCol  active grid column (1-based), or -1 for none
+     */
+    private void openNamedCellsPopup(int defaultRow, int defaultCol) {
+        NamedCellsDialog dlg = new NamedCellsDialog(frame, view.sheet, view.grid,
+                defaultRow, defaultCol);
+        dlg.setLocationRelativeTo(frame);
+        dlg.setVisible(true);
+        view.grid.repaint();
+    }
+
+    /** The currently selected grid cell, or null when nothing is selected. */
+    private int[] currentGridSelection() {
+        int[] range = currentRangeSelection();
+        if (range == null) {
+            return null;
+        }
+        return new int[]{range[0], range[2]};
+    }
+
+    /**
+     * The currently selected rectangle over data columns, or null. The result is
+     * {row0, row1, col0, col1} with 0-based rows and 1-based grid columns; the
+     * row-number column (0) is excluded from the rectangle.
+     */
+    private int[] currentRangeSelection() {
+        int r0 = view.grid.getSelectionModel().getMinSelectionIndex();
+        int r1 = view.grid.getSelectionModel().getMaxSelectionIndex();
+        int c0 = view.grid.getColumnModel().getSelectionModel().getMinSelectionIndex();
+        int c1 = view.grid.getColumnModel().getSelectionModel().getMaxSelectionIndex();
+        if (r0 < 0 || r1 < 0) {
+            return null;
+        }
+        c0 = Math.max(c0, 1);
+        c1 = Math.min(c1, view.sheet.cols());
+        if (r0 >= view.sheet.rows() || r1 < 0 || c1 < c0) {
+            return null;
+        }
+        r1 = Math.min(r1, view.sheet.rows() - 1);
+        return new int[]{r0, r1, c0, c1};
+    }
+
+    /** Opens the CellDialog for one cell and saves the result back if accepted. */
+    private void showEditDialog(SheetView v, int row, int col, Cell cell) {
+        try {
+            v.sheet.setBindingsText(varsArea.getText());
+        } catch (Exception ex) {
+            showError(ex);
+            return;
+        }
+        CellDialog dlg = new CellDialog((Frame) SwingUtilities.getWindowAncestor(v.grid),
+                cell, v.sheet.registry(), v.sheet.bindings());
+        dlg.setPosition(row, col);
+        dlg.setCellName(v.sheet.cellName(row, col));
+        dlg.setVisible(true);
+        if (dlg.wasSaved()) {
+            v.sheet.saveCell(row, col, dlg.getEditedText(), dlg.getEditedRawExpression(),
+                    dlg.getEditedNode(), dlg.getEditedDataType(), dlg.getEditedReferencedCells(),
+                    dlg.getEditedFormatPattern(), dlg.getEditedAlignment());
+            recomputeDependentsOnEdit(v, row, col);
+        }
+    }
+
+    private void recomputeDependentsOnEdit(SheetView v, int row, int col) {
+        try {
+            v.sheet.setBindingsText(varsArea.getText());
+            v.sheet.recomputeDependentsOnEdit(row, col);
+            v.grid.repaint();
+            setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed.");
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    private void resizeRowNumberColumn(JTable grid, int rows) {
+        int digits = String.valueOf(rows).length();
+        int w = digits * 8 + 12;
+        grid.getColumnModel().getColumn(0).setPreferredWidth(w);
+        grid.getColumnModel().getColumn(0).setMaxWidth(w);
+    }
+
+    /**
+     * Saves the current content. When a file is loaded (or was previously saved),
+     * it is written back in place; otherwise this behaves like Save As.
+     */
+    private void doSaveXml() {
+        if (currentFile != null) {
+            saveTo(currentFile);
+        } else {
+            doSaveXmlAs();
+        }
+    }
+
+    /**
+     * Always asks for a file name (Save As): the selected XML file becomes the
+     * new current file and the window title shows its name.
+     */
+    private void doSaveXmlAs() {
+        JFileChooser fc = new JFileChooser();
+        if (currentDir != null) {
+            fc.setCurrentDirectory(currentDir);
+        }
+        if (currentFile != null) {
+            fc.setSelectedFile(currentFile.toFile());
+        }
+        if (fc.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        saveTo(fc.getSelectedFile().toPath());
+    }
+
+    private void saveTo(Path target) {
+        try {
+            String xml = WorkbookIO.toXml(book, varsArea.getText());
+            Files.writeString(target, xml);
+            currentFile = target.toAbsolutePath().normalize();
+            currentDir = currentFile.getParent() != null ? currentFile.getParent().toFile() : null;
+            updateTitle();
+            setStatus("Workbook saved to " + currentFile.getFileName());
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    private void doOpenXml() {
+        JFileChooser fc = new JFileChooser();
+        if (currentDir != null) {
+            fc.setCurrentDirectory(currentDir);
+        }
+        if (fc.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        loadWorkbook(fc.getSelectedFile().toPath());
+    }
+
+    /**
+     * Loads a workbook XML file into the single sheet, mirroring
+     * {@code BookGui.loadWorkbook} (restore cell by cell via
+     * {@link Sheet#restoreCell} with the parsed {@code LoadedCell}, then
+     * bindings + {@code recomputeAll}). A multi-sheet file loads its first sheet.
+     */
+    private void loadWorkbook(Path file) {
+        try {
+            WorkbookIO.LoadedWorkbook loaded = WorkbookIO.fromXml(Files.readString(file));
+            applyWorkbook(loaded, file.getParent() != null ? file.getParent().toFile() : null, file);
+            setStatus("Workbook loaded from " + file.getFileName());
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    /**
+     * Applies parsed workbook content to the single sheet, mirroring
+     * {@code BookGui.loadWorkbook} (restore cell by cell via
+     * {@link Sheet#restoreCell}, then bindings + {@code recomputeAll}).
+     * {@code sourceDir} becomes the folder the Save dialog starts in. This is the
+     * no-dialog entry point used by {@code SheetGuiAPI.show()} to display an
+     * already-parsed sheet without a file chooser.
+     */
+    public void applyWorkbook(WorkbookIO.LoadedWorkbook loaded, File sourceDir) {
+        applyWorkbook(loaded, sourceDir, null);
+    }
+
+    /**
+     * Same as {@link #applyWorkbook(WorkbookIO.LoadedWorkbook, File)}, but also
+     * records the XML file the content belongs to, so the window title shows the
+     * file name and "Save XML" (Ctrl+S) can write back in place.
+     */
+    public void applyWorkbook(WorkbookIO.LoadedWorkbook loaded, File sourceDir, Path sourceFile) {
+        if (loaded.sheets.isEmpty()) {
+            throw new IllegalArgumentException("The XML file contains no sheets.");
+        }
+        currentDir = sourceDir;
+        WorkbookIO.LoadedSheet ls = loaded.sheets.get(0);
+        int idx = book.indexOf(view.sheet);
+        if (idx >= 0) {
+            book.remove(idx);
+        }
+        book = new SheetBook();
+        varsArea.setText(loaded.variablesText);
+        view = createSheetView();
+        view.sheet.setName(ls.name);
+        view.model.setSheetSize(ls.rows, ls.cols);
+        installRenderers(view);
+        resizeRowNumberColumn(view.grid, ls.rows);
+        gridPane.setViewportView(view.grid);
+        for (WorkbookIO.LoadedCell lc : ls.cells) {
+            view.sheet.restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
+                    lc.type, lc.formatPattern, lc.alignment);
+        }
+        view.sheet.setNamedRefs(ls.names);
+        view.sheet.setNamedRanges(ls.ranges);
+        view.sheet.setBindingsText(varsArea.getText());
+        view.sheet.recomputeAll();
+        view.grid.repaint();
+        currentFile = sourceFile == null ? null : sourceFile.toAbsolutePath().normalize();
+        updateTitle();
+    }
+
+    /** Shows the name of the current XML file (if any) in the window title. */
+    private void updateTitle() {
+        frame.setTitle(currentFile == null ? "Sheet GUI" : "Sheet GUI - " + currentFile.getFileName());
+    }
+
+    private void showError(Exception ex) {
+        JOptionPane.showMessageDialog(null, "Error: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        setStatus("Failed.");
+    }
+
+    private void setStatus(String text) {
+        status.setText(text);
+    }
+}

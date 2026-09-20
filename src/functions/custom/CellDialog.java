@@ -74,6 +74,7 @@ public class CellDialog extends JDialog {
     private boolean saved;
     private int selfRow = -1;
     private int selfCol = -1;
+    private String cellName;
 	private Set<CellRef>  referencedCells;
 	private Node lastNode;
 	private String formatPattern;
@@ -133,6 +134,7 @@ public class CellDialog extends JDialog {
         valueRow.add(alignmentCombo);
         valueRow.add(new JLabel(" "));
         valueRow.add(nodeTypeField);
+        valueRow.add(posLabel);
 
         JButton cancel = new JButton("CANCEL");
         JButton save = new JButton("SAVE");
@@ -341,9 +343,32 @@ public class CellDialog extends JDialog {
     public void setPosition(int row, int col) {
         selfRow = row;
         selfCol = col;
-        posLabel.setText("(" + (row + 1) + "," + (col + 1) + ")");
-        setTitle("Cell: " + (row + 1) + ", " + (col + 1));
+        updateLocation();
     }
+
+    /**
+     * Shows the named cell reference of the edited cell, if it has one, in the
+     * dialog title and beside the position label.
+     */
+    public void setCellName(String name) {
+        cellName = name == null ? null : name.trim();
+        updateLocation();
+    }
+
+    private void updateLocation() {
+        if (selfRow < 0 || selfCol < 1) {
+            return;
+        }
+        String pos = "(" + (selfRow + 1) + "," + (selfCol + 1) + ")";
+        String title = "Cell: " + (selfRow + 1) + ", " + (selfCol + 1);
+        if (cellName != null && !cellName.isEmpty()) {
+            pos += "   '" + cellName + "'";
+            title += " (" + cellName + ")";
+        }
+        posLabel.setText(pos);
+        setTitle(title);
+    }
+
     public void setDataType(String name) {
         typeLabel.setText(name == null ? " " : name);
     }

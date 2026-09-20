@@ -37,6 +37,22 @@ public class ArrayAccessNode extends Node {
         if (arr == null) {
             throw new ExpressionException("No array provided for '" + name + "'.");
         }
+        if (arr instanceof RangeValue rv) {
+            // Named rectangular ranges are indexed 1-based, e.g. Block[1,2].
+            Object rObj = rowExpr.evaluate(bindings, registry);
+            Object cObj = colExpr.evaluate(bindings, registry);
+            int r = EvalUtil.asInt(rObj);
+            int c = EvalUtil.asInt(cObj);
+            if (r < 1 || r > rv.rows()) {
+                throw new ExpressionException("Range '" + name + "' row index " + r
+                        + " out of bounds [1," + rv.rows() + "].");
+            }
+            if (c < 1 || c > rv.cols()) {
+                throw new ExpressionException("Range '" + name + "' column index " + c
+                        + " out of bounds [1," + rv.cols() + "].");
+            }
+            return rv.get(r, c);
+        }
         double[][] data;
         if (arr instanceof double[][] d) {
             data = d;
