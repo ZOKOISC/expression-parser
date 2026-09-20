@@ -163,14 +163,22 @@ public class CellDialog extends JDialog {
         }
 		Object v = cell.getValue();
 		String rawExpression = cell.getRawExpression();
-        // Percent-patterned numeric cells show their displayed text (e.g.
-        // "15.2%") in the Value field instead of the raw divided value.
-        String shown = (v instanceof Number)
+        // A cell whose expression failed shows the [ERROR] text (with the
+        // reason) in the Value field; percent-patterned numeric cells show
+        // their displayed text (e.g. "15.2%") instead of the raw divided value.
+        String shown;
+        if (cell.hasError()) {
+            shown = cell.getErrorText();
+        } else if (v == null) {
+            shown = "";
+        } else if ((v instanceof Number)
                 && cell.getFormatPattern() != null
-                && cell.getFormatPattern().endsWith("%")
-                ? cell.toTextValue()
-                : String.valueOf(v);
-        valueField.setText(v == null ? "" : shown);
+                && cell.getFormatPattern().endsWith("%")) {
+            shown = cell.toTextValue();
+        } else {
+            shown = String.valueOf(v);
+        }
+        valueField.setText(shown);
         if (rawExpression == null) 
 			exprArea.setText("");
 		else 
@@ -258,7 +266,7 @@ public class CellDialog extends JDialog {
                 return;
             }
             Object result = e.evaluate(bindings);
-            valueField.setText(result == null ? "[ERROR] null" : String.valueOf(result));
+            valueField.setText(result == null ? "[ERROR] no value" : String.valueOf(result));
             if (dataType.equals(DataType.ANY) && result != null) {
                 dataType = DataType.getDefault(String.valueOf(result));
                 dataTypeField.setText(dataType.name());
@@ -272,8 +280,14 @@ public class CellDialog extends JDialog {
         } catch (Exception ex) {
             stringArea.setText("");
             xmlArea.setText("Error: " + ex.getMessage());
-            valueField.setText("[ERROR] " + ex.getMessage());
+            valueField.setText(errorText(ex));
         }
+    }
+
+    /** "[ERROR]" plus the failure reason when there is one. */
+    private static String errorText(Throwable ex) {
+        String msg = ex == null ? null : ex.getMessage();
+        return msg == null || msg.isBlank() ? "[ERROR]" : "[ERROR] " + msg;
     }
     private void doCancel() {
 		initDialog();

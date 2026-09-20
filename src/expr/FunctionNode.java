@@ -30,8 +30,21 @@ public class FunctionNode extends Node {
 
     @Override
     public Object evaluate(Map<String, Object> bindings, FunctionRegistry registry) {
-        Function fn = registry.get(name);
+        Function fn = registry == null ? null : registry.get(name);
         if (fn == null) {
+            // "<sheetName>(row, col)": a call named after a sheet reads a cell on
+            // that sheet. The sheet name resolves through the bindings to its slot
+            // id, so the call is equivalent to get(<sheetName>, row, col).
+            Function get = registry == null ? null : registry.get("get");
+            Object slot = bindings == null ? null : bindings.get(name);
+            if (get != null && slot instanceof Number && params.size() == 2) {
+                List<Object> values = new ArrayList<>();
+                values.add(slot);
+                for (Node p : params) {
+                    values.add(p.evaluate(bindings, registry));
+                }
+                return get.evaluate(values);
+            }
             throw new ExpressionException("Unknown function: " + name);
         }
         if (!fn.acceptsParameterCount(params.size())) {

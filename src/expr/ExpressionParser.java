@@ -80,6 +80,14 @@ public class ExpressionParser {
             if (Character.isLetter(c) || c == '_') {
                 int start = i;
                 while (i < len && (Character.isLetterOrDigit(input.charAt(i)) || input.charAt(i) == '_')) i++;
+                // A sheet-qualified reference "<sheetName>.<cellName>" (or
+                // "<sheetName>.<rangeName>") is kept as one identifier token so
+                // the rest of the grammar treats it like any other name.
+                if (i + 1 < len && input.charAt(i) == '.'
+                        && (Character.isLetter(input.charAt(i + 1)) || input.charAt(i + 1) == '_')) {
+                    i++;                          // consume '.'
+                    while (i < len && (Character.isLetterOrDigit(input.charAt(i)) || input.charAt(i) == '_')) i++;
+                }
                 String word = input.substring(start, i);
                 String lower = word.toLowerCase();
                 Operation op = switch (lower) {

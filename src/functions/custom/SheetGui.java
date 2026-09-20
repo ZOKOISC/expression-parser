@@ -658,12 +658,12 @@ public class SheetGui {
         installRenderers(view);
         resizeRowNumberColumn(view.grid, ls.rows);
         gridPane.setViewportView(view.grid);
+        view.sheet.setNamedRefs(ls.names);
+        view.sheet.setNamedRanges(ls.ranges);
         for (WorkbookIO.LoadedCell lc : ls.cells) {
             view.sheet.restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
                     lc.type, lc.formatPattern, lc.alignment);
         }
-        view.sheet.setNamedRefs(ls.names);
-        view.sheet.setNamedRanges(ls.ranges);
         view.sheet.setBindingsText(varsArea.getText());
         view.sheet.recomputeAll();
         view.grid.repaint();

@@ -72,6 +72,9 @@ public class TaxFunction implements Function {
     }
 
     static double[][] toBrackets(Object value) {
+        if (value instanceof expr.RangeValue range) {
+            return rangeBrackets(range);
+        }
         double[][] src;
         if (value instanceof double[][] d) {
             src = d;
@@ -84,7 +87,8 @@ public class TaxFunction implements Function {
                 }
             }
         } else {
-            throw new ExpressionException("tax: first argument must be an array variable (e.g. tax(TAXBASE, gross)), got: "
+            throw new ExpressionException("tax: first argument must be an array variable (e.g. tax(TAXBASE, gross)) "
+                    + "or a named cell-range (e.g. tax(RATES, gross)), got: "
                     + (value == null ? "null" : value.getClass().getSimpleName()));
         }
         if (src.length == 0) {
@@ -97,6 +101,33 @@ public class TaxFunction implements Function {
             }
             brackets[i][0] = src[i][0];
             brackets[i][1] = src[i][1];
+        }
+        return brackets;
+    }
+
+    /**
+     * Builds the [range, percentage] bracket table from a named cell-range: the
+     * first column of the range holds the range values, the second column the
+     * percentages (the same two columns the array-variable form uses).
+     */
+    private static double[][] rangeBrackets(expr.RangeValue range) {
+        int rows = range.rows();
+        if (rows == 0) {
+            throw new ExpressionException("tax: the named cell-range is empty.");
+        }
+        if (range.cols() < 2) {
+            throw new ExpressionException("tax: the named cell-range must have at least two columns "
+                    + "[range, percentage].");
+        }
+        double[][] brackets = new double[rows][2];
+        for (int i = 0; i < rows; i++) {
+            Object lower = range.get(i + 1, 1);
+            Object rate = range.get(i + 1, 2);
+            if (lower == null || rate == null) {
+                throw new ExpressionException("tax: the named cell-range has an empty cell in row " + (i + 1) + ".");
+            }
+            brackets[i][0] = EvalUtil.asDouble(lower);
+            brackets[i][1] = EvalUtil.asDouble(rate);
         }
         return brackets;
     }

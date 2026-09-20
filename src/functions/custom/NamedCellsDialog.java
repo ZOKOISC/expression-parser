@@ -32,8 +32,8 @@ import expr.CellRef;
  * grid position) of the grid and lets the user manage the list:
  *
  * <ul>
- * <li><b>left-click</b> an entry: closes the window and selects the cell or
- *     rectangle in the grid,</li>
+ * <li><b>double-click</b> an entry: closes the window and selects the cell or
+ *     rectangle in the grid, positioning the cursor on the top-left cell,</li>
  * <li><b>right-click</b> an entry: edits the name and the reference (a blank
  *     name removes the entry),</li>
  * <li><b>"Add name…"</b> creates a single-cell name for the active cell,</li>
@@ -107,7 +107,7 @@ public class NamedCellsDialog extends JDialog {
 
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (e.getButton() == MouseEvent.BUTTON1 && e.getClickCount() == 1
+                if (e.getButton() == MouseEvent.BUTTON1 && e.getClickCount() >= 2
                         && !e.isPopupTrigger()) {
                     int index = list.locationToIndex(e.getPoint());
                     if (index >= 0 && index < entries.size()
@@ -121,7 +121,7 @@ public class NamedCellsDialog extends JDialog {
         addRangeButton.addActionListener(e -> addEntry(true));
 
         JPanel top = new JPanel(new BorderLayout(4, 4));
-        top.add(new JLabel("Left-click an entry to select it in the grid; right-click to edit."),
+        top.add(new JLabel("Double-click an entry to select it in the grid (cursor on its top-left); right-click to edit."),
                 BorderLayout.NORTH);
         hint.setHorizontalAlignment(SwingConstants.LEFT);
         top.add(hint, BorderLayout.SOUTH);
@@ -379,15 +379,19 @@ public class NamedCellsDialog extends JDialog {
                     || rect.getCol0() < 0 || rect.getCol1() >= sheet.cols()) {
                 return;
             }
+            int topRow = rect.getRow0();
+            int topCol = rect.getCol0() + 1;            // 1-based grid column
             grid.setCellSelectionEnabled(true);
             grid.getSelectionModel().setValueIsAdjusting(true);
             grid.getColumnModel().getSelectionModel().setValueIsAdjusting(true);
-            grid.getSelectionModel().setSelectionInterval(rect.getRow0(), rect.getRow1());
+            // Endpoints are passed bottom-to-top so the lead ("cursor") cell stays
+            // on the top-left of the rectangle while the whole range is selected.
+            grid.getSelectionModel().setSelectionInterval(rect.getRow1(), topRow);
             grid.getColumnModel().getSelectionModel()
-                    .setSelectionInterval(rect.getCol0() + 1, rect.getCol1() + 1);
+                    .setSelectionInterval(rect.getCol1() + 1, topCol);
             grid.getSelectionModel().setValueIsAdjusting(false);
             grid.getColumnModel().getSelectionModel().setValueIsAdjusting(false);
-            grid.scrollRectToVisible(grid.getCellRect(rect.getRow0(), rect.getCol0() + 1, true));
+            grid.scrollRectToVisible(grid.getCellRect(topRow, topCol, true));
             grid.requestFocusInWindow();
             return;
         }

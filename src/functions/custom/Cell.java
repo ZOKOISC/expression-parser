@@ -54,6 +54,8 @@ public class Cell {
     private Color foreground;
     private String formatPattern;
     private String horizontalAlignment;
+    /** Reason the last evaluation failed, or null when the value computed fine. */
+    private String errorMessage;
 
     public Cell(DataType type, Object value) {
         this(type, value, null, null, null);
@@ -106,6 +108,7 @@ public class Cell {
         this.rawExpression = rawText;
         this.expression = constantFor(value);
         this.referenced = null;
+        this.errorMessage = null;
         // Adopt the format pattern derived from a percent literal (e.g. "15.2%"
         // -> "0.0%") so the entered text keeps displaying; any explicitly set
         // pattern is preserved for non-percent input.
@@ -218,6 +221,26 @@ public class Cell {
         this.formatPattern = formatPattern;
     }
 
+    /** The reason the last evaluation failed, or null when it computed fine. */
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    /** True when the last evaluation of this cell's expression failed. */
+    public boolean hasError() {
+        return errorMessage != null;
+    }
+
+    /**
+     * The text shown for a failed evaluation: {@code "[ERROR]"} plus the reason
+     * when one is known, e.g. {@code "[ERROR] Division by zero."}.
+     */
+    public String getErrorText() {
+        return errorMessage == null || errorMessage.isBlank()
+                ? "[ERROR]"
+                : "[ERROR] " + errorMessage;
+    }
+
     public String getHorizontalAlignment() {
         return horizontalAlignment;
     }
@@ -241,6 +264,9 @@ public class Cell {
     }
 
     public String display() {
+        if (errorMessage != null) {
+            return getErrorText();
+        }
         if (value == null) {
             return "";
         }
@@ -506,21 +532,38 @@ public class Cell {
     }
 
     public void recalculate(CellRef self, Map<String, Cell> cellMap, Map<String, Object> bindings, FunctionRegistry registry, SheetBook book) {
-        if (expression == null || recalculating) {
+        if (recalculating) {
             return;
         }
         recalculating = true;
         try {
-            FunctionRegistry reg = registryFor(registry, book, self.getSheet());
-            Object v;
-            try {
-                v = expression.evaluate(bindings, reg);
-            } catch (RuntimeException ex) {
-                v = null;
+            if (expression != null) {
+                FunctionRegistry reg = registryFor(registry, book, self.getSheet());
+                // Evaluate against the cell's own sheet bindings (kept current), so a
+                // formula on another sheet still sees that sheet's variables and its
+                // own named references, however the recalculation was triggered.
+                Sheet owner = book == null ? null : book.get(self.getSheet());
+                Map<String, Object> vars = bindings;
+                if (owner != null) {
+                    owner.refreshNamedRefBindings();
+                    vars = owner.bindings();
+                }
+                Object v;
+                try {
+                    v = expression.evaluate(vars, reg);
+                    errorMessage = v == null ? "no value" : null;
+                } catch (RuntimeException ex) {
+                    v = null;
+                    String msg = ex.getMessage();
+                    errorMessage = msg == null || msg.isBlank() ? ex.getClass().getSimpleName() : msg;
+                }
+                value = v;
+                type = v == null ? DataType.ANY : EvalUtil.valueType(v);
+                textValue = v == null ? "" : EvalUtil.asString(v);
             }
-            value = v;
-            type = v == null ? DataType.ANY : EvalUtil.valueType(v);
-            textValue = v == null ? "" : EvalUtil.asString(v);
+            // Recurse into dependents even for a literal cell (no expression):
+            // clearing or changing a referenced cell must still recalculate the
+            // formulas that use it.
             dependents.reorder(cellMap);
             for (CellRef d : dependents.getList()) {
                 Cell dc = cellMap.get(d.toString());

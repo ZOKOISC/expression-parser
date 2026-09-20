@@ -75,6 +75,8 @@ public class BookGui {
     private JFrame frame;
     /** Folder the current workbook was loaded from (save dialog starts here). */
     private File currentDir;
+    /** XML file the workbook was loaded from, or the last file it was saved to. */
+    private Path currentFile;
     /** Tab being dragged when reordering sheets; -1 when idle. */
     private int dragFrom = -1;
     /** Tab index currently held by the drag-to-reorder gesture, or -1. */
@@ -94,17 +96,17 @@ public class BookGui {
      * embedded in the library so closing it does not exit the JVM.
      */
     public BookGui(File openFile, boolean exitOnClose) {
-        this(openFile, exitOnClose, "Sheet GUI");
+        this(openFile, exitOnClose, "BookGui");
     }
 
     /**
      * Same as the basic constructor but lets the caller choose the window
      * title (used by the library so the editor is titled after the book).
      */
-    private String bookName = "Sheet GUI";
+    private String bookName = "BookGui";
 
     public BookGui(File openFile, boolean exitOnClose, String windowTitle) {
-        this.bookName = windowTitle == null ? "Sheet GUI" : windowTitle;
+        this.bookName = windowTitle == null ? "BookGui" : windowTitle;
         buildUi();
         if (exitOnClose) {
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -146,7 +148,6 @@ public class BookGui {
         arrayControls.add(new JLabel("columns"));
         arrayControls.add(colsField);
         JButton btnCreate = new JButton("Resize Grid");
-        JButton btnSave = new JButton("Save XML");
         JButton btnOpen = new JButton("Open XML");
         JButton btnNames = new JButton("Named cells");
         arrayControls.add(btnCreate);
@@ -154,7 +155,6 @@ public class BookGui {
         JButton btnDeleteSheet = new JButton("Delete sheet");
         arrayControls.add(btnCreateSheet);
         arrayControls.add(btnDeleteSheet);
-        arrayControls.add(btnSave);
         arrayControls.add(btnOpen);
         arrayControls.add(btnNames);
         typeLabel.setFont(mono);
@@ -163,13 +163,19 @@ public class BookGui {
         JMenuBar menuBar = new JMenuBar();
         JMenu fileMenu = new JMenu("File");
         JMenuItem itemSave = new JMenuItem("Save XML");
+        JMenuItem itemSaveAs = new JMenuItem("Save As...");
         JMenuItem itemOpen = new JMenuItem("Open XML");
         itemSave.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK));
+        itemSaveAs.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S,
+                InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
         itemOpen.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_DOWN_MASK));
         fileMenu.add(itemSave);
+        fileMenu.add(itemSaveAs);
+        fileMenu.addSeparator();
         fileMenu.add(itemOpen);
         menuBar.add(fileMenu);
         itemSave.addActionListener(e -> doSaveXml());
+        itemSaveAs.addActionListener(e -> doSaveXmlAs());
         itemOpen.addActionListener(e -> doOpenXml());
 
         // Right-clicking the sheet name on a tab renames that sheet. The
@@ -241,7 +247,6 @@ public class BookGui {
         btnCreate.addActionListener(e -> doCreateArray());
         btnCreateSheet.addActionListener(e -> doCreateSheet());
         btnDeleteSheet.addActionListener(e -> doDeleteSheet());
-        btnSave.addActionListener(e -> doSaveXml());
         btnOpen.addActionListener(e -> doOpenXml());
         btnNames.addActionListener(e -> openNamedCellsPopup());
     }
@@ -700,18 +705,43 @@ public class BookGui {
         status.setText(text);
     }
 
+    /**
+     * Saves the whole workbook - every sheet plus the variables - as one XML
+     * file. When the workbook was loaded from (or previously saved to) a file,
+     * it is written back to that same file; otherwise this behaves like Save As.
+     */
     private void doSaveXml() {
+        if (currentFile != null) {
+            saveTo(currentFile);
+        } else {
+            doSaveXmlAs();
+        }
+    }
+
+    /** Always asks for a file name; the chosen file becomes the current file. */
+    private void doSaveXmlAs() {
         JFileChooser fc = new JFileChooser();
         if (currentDir != null) {
             fc.setCurrentDirectory(currentDir);
         }
+        if (currentFile != null) {
+            fc.setSelectedFile(currentFile.toFile());
+        }
         if (fc.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
             return;
         }
+        saveTo(fc.getSelectedFile().toPath());
+    }
+
+    /** Writes every sheet and the variables to one workbook XML file. */
+    private void saveTo(Path target) {
         try {
             String xml = WorkbookIO.toXml(book, varsArea.getText());
-            Files.writeString(fc.getSelectedFile().toPath(), xml);
-            setStatus("Workbook saved to " + fc.getSelectedFile().getName());
+            Files.writeString(target, xml);
+            currentFile = target.toAbsolutePath().normalize();
+            currentDir = currentFile.getParent() != null ? currentFile.getParent().toFile() : null;
+            updateTitle();
+            setStatus("Workbook saved to " + currentFile.getFileName());
         } catch (Exception ex) {
             showError(ex);
         }
@@ -732,6 +762,7 @@ public class BookGui {
         try {
             WorkbookIO.LoadedWorkbook loaded = WorkbookIO.fromXml(Files.readString(file));
             currentDir = file.getParent() != null ? file.getParent().toFile() : null;
+            currentFile = file.toAbsolutePath().normalize();
             tabs.removeAll();
             for (SheetView sv : new ArrayList<>(sheets)) {
                 book.remove(book.indexOf(sv.sheet));
@@ -739,19 +770,26 @@ public class BookGui {
             sheets.clear();
             book = new SheetBook();
             varsArea.setText(loaded.variablesText);
+            List<SheetView> created = new ArrayList<>();
             for (WorkbookIO.LoadedSheet ls : loaded.sheets) {
                 SheetView v = createSheetView();
                 v.sheet.setName(ls.name);
                 v.model.setSheetSize(ls.rows, ls.cols);
                 installRenderers(v);
                 resizeRowNumberColumn(v.grid, ls.rows);
+                v.sheet.setNamedRefs(ls.names);
+                v.sheet.setNamedRanges(ls.ranges);
                 tabs.addTab(v.sheet.name(), scrollFor(v));
-                for (WorkbookIO.LoadedCell lc : ls.cells) {
+                created.add(v);
+            }
+            // Restore cells only once every sheet name and named reference exists,
+            // so cross-sheet references (s1.Name) resolve while loading.
+            for (int i = 0; i < loaded.sheets.size(); i++) {
+                SheetView v = created.get(i);
+                for (WorkbookIO.LoadedCell lc : loaded.sheets.get(i).cells) {
                     v.sheet.restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
                             lc.type, lc.formatPattern, lc.alignment);
                 }
-                v.sheet.setNamedRefs(ls.names);
-                v.sheet.setNamedRanges(ls.ranges);
             }
             for (SheetView v : sheets) {
                 v.sheet.setBindingsText(varsArea.getText());
@@ -761,9 +799,20 @@ public class BookGui {
             if (!sheets.isEmpty()) {
                 tabs.setSelectedIndex(0);
             }
+            updateTitle();
             setStatus("Workbook loaded from " + file.getFileName());
         } catch (Exception ex) {
             showError(ex);
         }
+    }
+
+    /**
+     * Shows the workbook file the editor was opened from (or last saved to) in
+     * the window title, after the book name.
+     */
+    private void updateTitle() {
+        frame.setTitle(currentFile == null
+                ? bookName
+                : bookName + " - " + currentFile.getFileName());
     }
 }

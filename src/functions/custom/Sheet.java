@@ -41,6 +41,8 @@ public class Sheet implements CellProvider {
     /** Named rectangular ranges of this sheet: name -> normalized CellRect (0-based). */
     private final Map<String, CellRect> namedRanges = new LinkedHashMap<>();
     private final Set<String> injectedSheetNameBindings = new LinkedHashSet<>();
+    /** Keys of the cross-sheet bindings injected by {@link #refreshCrossSheetBindings()}. */
+    private final Set<String> injectedCrossSheetBindings = new LinkedHashSet<>();
     private int activeRow = 0;
     private int activeCol = 0;
 
@@ -343,6 +345,103 @@ public class Sheet implements CellProvider {
             }
             bindings.put(e.getKey(), new RangeBinding(rect));
         }
+        refreshCrossSheetBindings();
+    }
+
+    /**
+     * Injects the workbook's cross-sheet references into this sheet's bindings:
+     * for every sheet of the book (including this one) and every named cell /
+     * named range on it, a key {@code "<sheetName>.<name>"} is bound to the
+     * current value (a live {@link RangeValue} for ranges). Formulas can then
+     * read another sheet's named cell as {@code s1.s1BaseNum} and a cell of
+     * another sheet's named range as {@code s1.Block[1,2]}. Injected keys are
+     * tracked so a removed or renamed name never leaves a stale entry behind.
+     */
+    public void refreshCrossSheetBindings() {
+        for (String key : injectedCrossSheetBindings) {
+            bindings.remove(key);
+        }
+        injectedCrossSheetBindings.clear();
+        if (book == null) {
+            return;
+        }
+        for (int i = 0; i < book.size(); i++) {
+            Sheet other = book.get(i);
+            if (other == null) {
+                continue;
+            }
+            String sheetName = other.name();
+            if (sheetName == null || sheetName.isEmpty()) {
+                continue;
+            }
+            String prefix = sheetName + ".";
+            for (Map.Entry<String, CellRef> e : other.namedRefs().entrySet()) {
+                CellRef ref = e.getValue();
+                Cell c = other.cell(ref.getRow(), ref.getCol() + 1);
+                String key = prefix + e.getKey();
+                bindings.put(key, c == null ? null : c.getValue());
+                injectedCrossSheetBindings.add(key);
+            }
+            for (Map.Entry<String, CellRect> e : other.namedRanges().entrySet()) {
+                String key = prefix + e.getKey();
+                bindings.put(key, other.rangeBinding(e.getValue()));
+                injectedCrossSheetBindings.add(key);
+            }
+        }
+    }
+
+    /** A live array-like view over a named range of this sheet; 1-based indices. */
+    RangeValue rangeBinding(CellRect rect) {
+        return new RangeBinding(rect.normalize(sheetIndex()));
+    }
+
+    /** The sheet named {@code sheetName} in this workbook, or null when absent. */
+    private Sheet sheetByName(String sheetName) {
+        if (book == null || sheetName == null) {
+            return null;
+        }
+        for (int i = 0; i < book.size(); i++) {
+            Sheet s = book.get(i);
+            if (s != null && sheetName.equals(s.name())) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The CellRef behind a {@code "<sheetName>.<cellName>"} reference (normalized
+     * to that sheet), or null when the sheet or the name does not exist.
+     */
+    private CellRef resolveCrossCell(String dotted) {
+        int dot = dotted == null ? -1 : dotted.indexOf('.');
+        if (dot <= 0 || dot >= dotted.length() - 1) {
+            return null;
+        }
+        Sheet target = sheetByName(dotted.substring(0, dot));
+        if (target == null) {
+            return null;
+        }
+        CellRef ref = target.namedRefs().get(dotted.substring(dot + 1));
+        return ref == null ? null : ref.normalize(target.sheetIndex());
+    }
+
+    /**
+     * The CellRect behind a {@code "<sheetName>.<rangeName>"} reference
+     * (normalized to that sheet), or null when the sheet or the name does not
+     * exist.
+     */
+    private CellRect resolveCrossRange(String dotted) {
+        int dot = dotted == null ? -1 : dotted.indexOf('.');
+        if (dot <= 0 || dot >= dotted.length() - 1) {
+            return null;
+        }
+        Sheet target = sheetByName(dotted.substring(0, dot));
+        if (target == null) {
+            return null;
+        }
+        CellRect rect = target.namedRanges().get(dotted.substring(dot + 1));
+        return rect == null ? null : rect.normalize(target.sheetIndex());
     }
 
     /** Live array-like view over a named range; indices are 1-based. */
@@ -631,9 +730,39 @@ public class Sheet implements CellProvider {
     }
 
     /**
+     * Adds the CellRef behind a {@code "<sheetName>(row, col)"} call - a
+     * function call named after a sheet - when both arguments are numeric
+     * constants, so editing the referenced cell recalculates the formula. Row
+     * and column are 1-based.
+     */
+    private void addSheetCallRef(FunctionNode f, Set<CellRef> out) {
+        if (book == null || f.getParams().size() != 2) {
+            return;
+        }
+        Sheet target = sheetByName(f.getName());
+        if (target == null) {
+            return;
+        }
+        Node rowNode = f.getParams().get(0);
+        Node colNode = f.getParams().get(1);
+        if (!(rowNode instanceof ConstantNode r) || !(colNode instanceof ConstantNode c)
+                || r.getType() != DataType.NUMERIC || c.getType() != DataType.NUMERIC) {
+            return;
+        }
+        double rv = r.numericValue();
+        double cv = c.numericValue();
+        if (Math.floor(rv) != rv || Math.floor(cv) != cv) {
+            return;
+        }
+        out.add(new CellRef(target.sheetIndex(), (int) rv - 1, (int) cv - 1));
+    }
+
+    /**
      * Adds the CellRefs behind every named cell reference used in the node tree:
-     * {@code get('Name')} calls and bare {@code Name} variables. The named cell
-     * is then tracked as a dependent so editing it recalculates the formula.
+     * {@code get('Name')} calls, bare {@code Name} variables, cross-sheet
+     * {@code sheet.Name} references and {@code sheetName(row, col)} calls. The
+     * referenced cell is then tracked as a dependent so editing it recalculates
+     * the formula.
      */
     private void addNamedRefs(Node n, Set<CellRef> out) {
         if (n == null) {
@@ -649,6 +778,7 @@ public class Sheet implements CellProvider {
                     }
                 }
             }
+            addSheetCallRef(f, out);
             for (Node p : f.getParams()) {
                 addNamedRefs(p, out);
             }
@@ -666,21 +796,38 @@ public class Sheet implements CellProvider {
                 addNamedRefs(c, out);
             }
         } else if (n instanceof ArrayAccessNode aa) {
-            CellRect range = namedRanges.get(aa.getName());
-            if (range != null) {
-                CellRect nr = range.normalize(sheetIndex());
-                for (int r = nr.getRow0(); r <= nr.getRow1(); r++) {
-                    for (int c = nr.getCol0(); c <= nr.getCol1(); c++) {
-                        out.add(new CellRef(nr.getSheet(), r, c));
-                    }
-                }
-            }
+            addRangeCells(resolveRange(aa.getName()), out);
             addNamedRefs(aa.getRowExpr(), out);
             addNamedRefs(aa.getColExpr(), out);
         } else if (n instanceof VariableNode v) {
             CellRef ref = namedRefs.get(v.getName());
+            if (ref == null) {
+                ref = resolveCrossCell(v.getName());       // "<sheet>.<cell>"
+            }
             if (ref != null) {
                 out.add(ref.normalize(sheetIndex()));
+            } else {
+                // A bare named range used as a value, e.g. tax(RATES, gross).
+                addRangeCells(resolveRange(v.getName()), out);
+            }
+        }
+    }
+
+    /** The CellRect a (possibly cross-sheet) range name refers to, or null. */
+    private CellRect resolveRange(String name) {
+        CellRect rect = namedRanges.get(name);
+        return rect != null ? rect : resolveCrossRange(name);
+    }
+
+    /** Adds every cell of {@code range} as a referenced cell. */
+    private void addRangeCells(CellRect range, Set<CellRef> out) {
+        if (range == null) {
+            return;
+        }
+        CellRect nr = range.normalize(sheetIndex());
+        for (int r = nr.getRow0(); r <= nr.getRow1(); r++) {
+            for (int c = nr.getCol0(); c <= nr.getCol1(); c++) {
+                out.add(new CellRef(nr.getSheet(), r, c));
             }
         }
     }
