@@ -4,6 +4,8 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Frame;
+import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -18,8 +20,10 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import javax.swing.BorderFactory;
+import javax.swing.border.Border;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
@@ -42,7 +46,11 @@ import javax.swing.event.TableModelEvent;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableCellRenderer;
 
+import expr.CellRect;
+import expr.CellRef;
 import expr.DataType;
+import expr.Expression;
+import expr.Node;
 import functions.MathFunctions;
 import functions.custom.ArrayModel;
 import functions.custom.Cell;
@@ -144,54 +152,65 @@ public class BookGui {
         arrayControls.add(new JLabel("Grid size: rows"));
         rowsField.setFont(mono);
         colsField.setFont(mono);
+        // Read-only display of the selected sheet's dimensions.
+        rowsField.setEditable(false);
+        colsField.setEditable(false);
+        rowsField.setHorizontalAlignment(JTextField.CENTER);
+        colsField.setHorizontalAlignment(JTextField.CENTER);
         arrayControls.add(rowsField);
         arrayControls.add(new JLabel("columns"));
         arrayControls.add(colsField);
-        JButton btnCreate = new JButton("Resize Grid");
-        JButton btnOpen = new JButton("Open XML");
-        JButton btnNames = new JButton("Named cells");
-        arrayControls.add(btnCreate);
         JButton btnCreateSheet = new JButton("Create sheet");
-        JButton btnDeleteSheet = new JButton("Delete sheet");
         arrayControls.add(btnCreateSheet);
-        arrayControls.add(btnDeleteSheet);
-        arrayControls.add(btnOpen);
-        arrayControls.add(btnNames);
         typeLabel.setFont(mono);
         arrayControls.add(typeLabel);
 
         JMenuBar menuBar = new JMenuBar();
         JMenu fileMenu = new JMenu("File");
+        JMenuItem itemNew = new JMenuItem("New Book");
         JMenuItem itemSave = new JMenuItem("Save XML");
         JMenuItem itemSaveAs = new JMenuItem("Save As...");
         JMenuItem itemOpen = new JMenuItem("Open XML");
+        itemNew.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_N, InputEvent.CTRL_DOWN_MASK));
         itemSave.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK));
         itemSaveAs.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S,
                 InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
         itemOpen.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_DOWN_MASK));
+        fileMenu.add(itemNew);
+        fileMenu.addSeparator();
         fileMenu.add(itemSave);
         fileMenu.add(itemSaveAs);
         fileMenu.addSeparator();
         fileMenu.add(itemOpen);
         menuBar.add(fileMenu);
+        itemNew.addActionListener(e -> doNewBook());
         itemSave.addActionListener(e -> doSaveXml());
         itemSaveAs.addActionListener(e -> doSaveXmlAs());
         itemOpen.addActionListener(e -> doOpenXml());
 
-        // Right-clicking the sheet name on a tab renames that sheet. The
-        // clicked tab is selected first so doRenameSheet() targets it.
+        // Double-clicking a sheet tab renames it; right-clicking it opens the
+        // sheet menu (Delete / Resize / Names / Save as / Import).
         tabs.addMouseListener(new MouseAdapter() {
             @Override
-            public void mousePressed(MouseEvent e) {
-                if (e.getButton() != MouseEvent.BUTTON3) {
+            public void mouseClicked(MouseEvent e) {
+                if (e.getButton() != MouseEvent.BUTTON1 || e.getClickCount() != 2) {
                     return;
                 }
                 int index = tabs.indexAtLocation(e.getX(), e.getY());
-                if (index < 0) {
-                    return;
+                if (index >= 0) {
+                    tabs.setSelectedIndex(index);
+                    doRenameSheet();
                 }
-                tabs.setSelectedIndex(index);
-                doRenameSheet();
+            }
+
+            @Override
+            public void mousePressed(MouseEvent e) {
+                maybeShowTabMenu(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                maybeShowTabMenu(e);
             }
         });
 
@@ -244,11 +263,10 @@ public class BookGui {
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
 
-        btnCreate.addActionListener(e -> doCreateArray());
         btnCreateSheet.addActionListener(e -> doCreateSheet());
-        btnDeleteSheet.addActionListener(e -> doDeleteSheet());
-        btnOpen.addActionListener(e -> doOpenXml());
-        btnNames.addActionListener(e -> openNamedCellsPopup());
+        // Keep the read-only grid-size fields showing the selected sheet's size.
+        tabs.addChangeListener(e -> updateGridSizeFields());
+        updateGridSizeFields();
     }
 
     private SheetView createSheetView() {
@@ -260,6 +278,11 @@ public class BookGui {
         // selected via the row-number column and the column headers instead.
         v.grid.setCellSelectionEnabled(true);
         v.grid.getTableHeader().setReorderingAllowed(false);
+        // Column widths are independent of the window: resizing the window keeps
+        // the widths, and any column (including the last) can be resized without
+        // changing the window width (a horizontal scrollbar appears if needed).
+        v.grid.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
+        v.grid.getTableHeader().setResizingAllowed(true);
         v.grid.getModel().addTableModelListener(e -> {
             if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
                 Cell cell = v.sheet.handleCellUpdate(e.getFirstRow(), e.getColumn(),
@@ -375,11 +398,16 @@ public class BookGui {
     private JScrollPane scrollFor(SheetView v) {
         JScrollPane s = new JScrollPane(v.grid);
         s.setPreferredSize(new Dimension(600, 200));
+        // As-needed scrollbars: when the (resizable) window is too small to show
+        // every column at its preset width or every row, the grid scrolls.
+        s.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        s.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         return s;
     }
 
     private SheetView current() {
-        return sheets.get(tabs.getSelectedIndex());
+        int index = tabs.getSelectedIndex();
+        return index >= 0 && index < sheets.size() ? sheets.get(index) : null;
     }
 
     private static class FormatCellRenderer extends DefaultTableCellRenderer {
@@ -433,10 +461,31 @@ public class BookGui {
                     }
                 }
                 setHorizontalAlignment(swingAlign);
+                padAlignedSide(swingAlign);
             } else {
                 setHorizontalAlignment(SwingConstants.CENTER);
             }
             return this;
+        }
+
+        /**
+         * Adds a one-character inset on the aligned side - from the left for
+         * left-aligned values, from the right for right-aligned values - on top
+         * of the renderer's default cell border, so the text is not flush with
+         * the cell edge. Centered/other cells keep the default border.
+         */
+        private void padAlignedSide(int align) {
+            if (align != SwingConstants.LEFT && align != SwingConstants.RIGHT) {
+                return;
+            }
+            int pad = getFontMetrics(getFont()).charWidth('0');
+            Border base = getBorder();
+            Insets ins = base == null ? new Insets(1, 1, 1, 1) : base.getBorderInsets(this);
+            if (align == SwingConstants.RIGHT) {
+                setBorder(BorderFactory.createEmptyBorder(ins.top, ins.left, ins.bottom, ins.right + pad));
+            } else {
+                setBorder(BorderFactory.createEmptyBorder(ins.top, ins.left + pad, ins.bottom, ins.right));
+            }
         }
     }
 
@@ -449,17 +498,33 @@ public class BookGui {
     }
 
     private void doCreateSheet() {
+        int[] dim = promptDimensions("New sheet dimensions", currentRows(), currentCols());
+        if (dim == null) {
+            return;
+        }
+        createSheet(dim[0], dim[1]);
+    }
+
+    /** Creates, sizes and shows a new sheet of the given dimensions. */
+    private void createSheet(int rows, int cols) {
+        String name = nextSheetName();      // named after its place in the display order
         SheetView v = createSheetView();
-        v.model.setSheetSize(3, 3);
+        v.sheet.setName(name);
+        v.model.setSheetSize(rows, cols);
         installRenderers(v);
-        resizeRowNumberColumn(v.grid, 3);
+        resizeRowNumberColumn(v.grid, rows);
         tabs.addTab(v.sheet.name(), scrollFor(v));
         tabs.setSelectedIndex(tabs.getTabCount() - 1);
-        setStatus("Sheet created: " + v.sheet.name());
+        updateGridSizeFields();
+        setStatus("Sheet created: " + v.sheet.name() + " (" + rows + "x" + cols + ").");
     }
 
     private void doDeleteSheet() {
-        if (tabs.getTabCount() <= 1) {
+        if (tabs.getTabCount() == 0) {
+            setStatus("There is no sheet to delete.");
+            return;
+        }
+        if (tabs.getTabCount() == 1) {
             setStatus("Cannot delete the last sheet.");
             return;
         }
@@ -467,7 +532,24 @@ public class BookGui {
         tabs.removeTabAt(idx);
         sheets.remove(idx);
         book.remove(idx);
+        updateGridSizeFields();
         setStatus("Sheet deleted.");
+    }
+
+    /**
+     * Starts a brand-new empty book: every sheet (tab) is dropped, so the book
+     * holds no sheets until one is added with "Create sheet". The loaded file is
+     * forgotten (the window title drops its name) and the variables text is kept.
+     */
+    private void doNewBook() {
+        book = new SheetBook();
+        tabs.removeAll();
+        sheets.clear();
+        currentFile = null;
+        typeLabel.setText(" ");
+        updateTitle();
+        updateGridSizeFields();
+        setStatus("New empty book created - use \"Create sheet\" to add a sheet.");
     }
 
     /**
@@ -661,19 +743,50 @@ public class BookGui {
         int digits = String.valueOf(rows).length();
         int w = digits * 8 + 12;
         grid.getColumnModel().getColumn(0).setPreferredWidth(w);
+        grid.getColumnModel().getColumn(0).setMinWidth(w);
         grid.getColumnModel().getColumn(0).setMaxWidth(w);
+        grid.getColumnModel().getColumn(0).setResizable(false);   // row-number column is fixed
+    }
+
+    /** The current widths of a grid's data columns (column 0 holds the row numbers). */
+    private static List<Integer> dataColumnWidths(JTable grid) {
+        List<Integer> widths = new ArrayList<>();
+        for (int i = 1; i < grid.getColumnModel().getColumnCount(); i++) {
+            widths.add(grid.getColumnModel().getColumn(i).getWidth());
+        }
+        return widths;
+    }
+
+    /** Restores saved data-column widths on a grid; missing/extra entries are ignored. */
+    private static void applyColumnWidths(JTable grid, List<Integer> widths) {
+        if (widths == null || widths.isEmpty()) {
+            return;
+        }
+        int count = Math.min(widths.size(), grid.getColumnModel().getColumnCount() - 1);
+        for (int i = 0; i < count; i++) {
+            Integer w = widths.get(i);
+            if (w == null || w <= 0) {
+                continue;
+            }
+            grid.getColumnModel().getColumn(i + 1).setPreferredWidth(w);
+            grid.getColumnModel().getColumn(i + 1).setWidth(w);
+        }
     }
 
     private void doCreateArray() {
+        SheetView v = current();
+        if (v == null) {
+            setStatus("Create a sheet first - the book has no sheets.");
+            return;
+        }
+        int[] dim = promptDimensions("Resize grid", v.sheet.rows(), v.sheet.cols());
+        if (dim == null) {
+            return;
+        }
+        int rows = dim[0];
+        int cols = dim[1];
         try {
-            int rows = Integer.parseInt(rowsField.getText().trim());
-            int cols = Integer.parseInt(colsField.getText().trim());
-            if (rows < 1 || cols < 1 || rows > 100 || cols > 100) {
-                throw new IllegalArgumentException("Rows and columns must be between 1 and 100.");
-            }
-            SheetView v = current();
-                        SheetView v0 = v;
-            int lost = v0.sheet.lostCellsIfResizedTo(rows, cols);
+            int lost = v.sheet.lostCellsIfResizedTo(rows, cols);
             if (lost > 0) {
                 int choice = JOptionPane.showConfirmDialog(
                         frame,
@@ -682,18 +795,90 @@ public class BookGui {
                                 + "Resize anyway?",
                         "Resize grid - discarding used cells", JOptionPane.YES_NO_OPTION);
                 if (choice != JOptionPane.YES_OPTION) {
-                    setStatus("Resize cancelled - the grid still has " + v0.sheet.rows() + " x "
-                            + v0.sheet.cols() + " cells.");
+                    setStatus("Resize cancelled - the grid still has " + v.sheet.rows() + " x "
+                            + v.sheet.cols() + " cells.");
                     return;
                 }
             }
-            v0.model.setSheetSize(rows, cols);
+            v.model.setSheetSize(rows, cols);
             installRenderers(v);
             resizeRowNumberColumn(v.grid, rows);
+            updateGridSizeFields();
             setStatus("Grid resized: " + rows + "x" + cols + ". Fill the cells and use get(row,col).");
         } catch (Exception ex) {
             showError(ex);
         }
+    }
+
+    /**
+     * Asks for a grid size (rows x columns), pre-filled with the given defaults.
+     * Returns {rows, cols}, or null when the user cancels or enters something
+     * outside 1..100.
+     */
+    private int[] promptDimensions(String title, int defaultRows, int defaultCols) {
+        JTextField rowsInput = new JTextField(String.valueOf(defaultRows), 5);
+        JTextField colsInput = new JTextField(String.valueOf(defaultCols), 5);
+        JPanel panel = new JPanel(new GridLayout(0, 1, 4, 4));
+        panel.add(new JLabel("Number of rows:"));
+        panel.add(rowsInput);
+        panel.add(new JLabel("Number of columns:"));
+        panel.add(colsInput);
+        int choice = JOptionPane.showConfirmDialog(frame, panel, title,
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (choice != JOptionPane.OK_OPTION) {
+            return null;
+        }
+        try {
+            int rows = Integer.parseInt(rowsInput.getText().trim());
+            int cols = Integer.parseInt(colsInput.getText().trim());
+            String error = dimensionError(rows, cols);
+            if (error != null) {
+                throw new IllegalArgumentException(error);
+            }
+            return new int[]{rows, cols};
+        } catch (NumberFormatException ex) {
+            showError(new IllegalArgumentException("Rows and columns must be whole numbers."));
+            return null;
+        } catch (IllegalArgumentException ex) {
+            showError(ex);
+            return null;
+        }
+    }
+
+    /**
+     * An error message when the grid dimensions are invalid, or null when they
+     * are fine. The number of rows is not capped; columns are limited to 100.
+     */
+    private static String dimensionError(int rows, int cols) {
+        if (rows < 1) {
+            return "The number of rows must be 1 or more.";
+        }
+        if (cols < 1 || cols > 100) {
+            return "The number of columns must be between 1 and 100.";
+        }
+        return null;
+    }
+
+    /** Rows of the selected sheet, or 3 when no sheet is selected. */
+    private int currentRows() {
+        SheetView v = current();
+        return v == null ? 3 : v.sheet.rows();
+    }
+
+    /** Columns of the selected sheet, or 3 when no sheet is selected. */
+    private int currentCols() {
+        SheetView v = current();
+        return v == null ? 3 : v.sheet.cols();
+    }
+
+    /**
+     * Shows the selected sheet's dimensions in the read-only "Grid size" fields;
+     * both are blank when the book has no sheet.
+     */
+    private void updateGridSizeFields() {
+        SheetView v = current();
+        rowsField.setText(v == null ? "" : String.valueOf(v.sheet.rows()));
+        colsField.setText(v == null ? "" : String.valueOf(v.sheet.cols()));
     }
 
     private void showError(Exception ex) {
@@ -736,12 +921,21 @@ public class BookGui {
     /** Writes every sheet and the variables to one workbook XML file. */
     private void saveTo(Path target) {
         try {
-            List<Integer> order = new ArrayList<>();
-            for (SheetView v : sheets) {
-                order.add(book.indexOf(v.sheet));
+            List<String> order = new ArrayList<>();
+            List<List<Integer>> widths = new ArrayList<>();
+            for (int i = 0; i < book.size(); i++) {
+                widths.add(null);
             }
-            int activeTab = tabs.getSelectedIndex();
-            String xml = WorkbookIO.toXml(book, varsArea.getText(), order, activeTab);
+            for (SheetView v : sheets) {
+                order.add(v.sheet.uuid());
+                int idx = book.indexOf(v.sheet);
+                if (idx >= 0 && idx < widths.size()) {
+                    widths.set(idx, dataColumnWidths(v.grid));
+                }
+            }
+            SheetView active = current();
+            String activeUuid = active == null ? null : active.sheet.uuid();
+            String xml = WorkbookIO.toXml(book, varsArea.getText(), order, activeUuid, widths);
             Files.writeString(target, xml);
             currentFile = target.toAbsolutePath().normalize();
             currentDir = currentFile.getParent() != null ? currentFile.getParent().toFile() : null;
@@ -779,9 +973,11 @@ public class BookGui {
             for (WorkbookIO.LoadedSheet ls : loaded.sheets) {
                 SheetView v = createSheetView();
                 v.sheet.setName(ls.name);
+                v.sheet.setUuid(ls.uuid);
                 v.model.setSheetSize(ls.rows, ls.cols);
                 installRenderers(v);
                 resizeRowNumberColumn(v.grid, ls.rows);
+                applyColumnWidths(v.grid, ls.columnWidths);
                 v.sheet.setNamedRefs(ls.names);
                 v.sheet.setNamedRanges(ls.ranges);
                 tabs.addTab(v.sheet.name(), scrollFor(v));
@@ -806,6 +1002,7 @@ public class BookGui {
                 tabs.setSelectedIndex(0);
             }
             applyVisualOrder(loaded.visualOrder, loaded.activeSheet);
+            updateGridSizeFields();
             updateTitle();
             setStatus("Workbook loaded from " + file.getFileName());
         } catch (Exception ex) {
@@ -815,16 +1012,17 @@ public class BookGui {
 
     /**
      * Applies the saved presentation of the sheet tabs: {@code order} lists the
-     * restored sheet positions in the order their tabs were shown and
-     * {@code activeTab} is the tab that was selected. Rebuilds the tabs in that
-     * order and selects the saved tab, so the Book GUI reopens as it was saved.
+     * sheets' UUIDs in the order their tabs were shown and {@code activeUuid} is
+     * the UUID of the sheet that was selected. Rebuilds the tabs in that order
+     * and selects the saved sheet, so the Book GUI reopens as it was saved.
      */
-    private void applyVisualOrder(List<Integer> order, int activeTab) {
+    private void applyVisualOrder(List<String> order, String activeUuid) {
         if (order != null && !order.isEmpty()) {
             List<SheetView> reordered = new ArrayList<>();
-            for (int idx : order) {
-                if (idx >= 0 && idx < sheets.size() && !reordered.contains(sheets.get(idx))) {
-                    reordered.add(sheets.get(idx));
+            for (String id : order) {
+                SheetView match = sheetView(id);
+                if (match != null && !reordered.contains(match)) {
+                    reordered.add(match);
                 }
             }
             for (SheetView v : sheets) {
@@ -839,10 +1037,235 @@ public class BookGui {
                 tabs.addTab(v.sheet.name(), scrollFor(v));
             }
         }
-        if (activeTab >= 0 && activeTab < tabs.getTabCount()) {
-            tabs.setSelectedIndex(activeTab);
+        int activeIndex = indexOfSheet(activeUuid);
+        if (activeIndex >= 0) {
+            tabs.setSelectedIndex(activeIndex);
         } else if (tabs.getTabCount() > 0) {
             tabs.setSelectedIndex(0);
+        }
+    }
+
+    /** The view of the sheet with the given UUID, or null. */
+    private SheetView sheetView(String uuid) {
+        for (SheetView v : sheets) {
+            if (v.sheet.uuid().equals(uuid)) {
+                return v;
+            }
+        }
+        return null;
+    }
+
+    /** The display position of the sheet with the given UUID, or -1. */
+    private int indexOfSheet(String uuid) {
+        if (uuid == null) {
+            return -1;
+        }
+        for (int i = 0; i < sheets.size(); i++) {
+            if (uuid.equals(sheets.get(i).sheet.uuid())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** The next free "Sheet N" name for a new sheet at the end of the display order. */
+    private String nextSheetName() {
+        int n = tabs.getTabCount() + 1;
+        String name;
+        do {
+            name = "Sheet " + n;
+            n++;
+        } while (sheetNameUsed(name));
+        return name;
+    }
+
+    private boolean sheetNameUsed(String name) {
+        for (SheetView v : sheets) {
+            if (v.sheet.name().equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Shows the sheet menu when a right-click landed on a tab. */
+    private void maybeShowTabMenu(MouseEvent e) {
+        if (e.getButton() != MouseEvent.BUTTON3 && !e.isPopupTrigger()) {
+            return;
+        }
+        int index = tabs.indexAtLocation(e.getX(), e.getY());
+        if (index < 0) {
+            return;
+        }
+        tabs.setSelectedIndex(index);
+        showTabMenu(e.getX(), e.getY());
+    }
+
+    /** The right-click menu of a sheet tab: Delete / Resize / Names / Save as / Import. */
+    private void showTabMenu(int x, int y) {
+        buildTabMenu().show(tabs, x, y);
+    }
+
+    /** Builds the sheet tab menu. */
+    private JPopupMenu buildTabMenu() {
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem delete = new JMenuItem("Delete");
+        JMenuItem resize = new JMenuItem("Resize...");
+        JMenuItem names = new JMenuItem("Names...");
+        JMenuItem saveAs = new JMenuItem("Save as...");
+        JMenuItem importItem = new JMenuItem("Import...");
+        delete.addActionListener(e -> doDeleteSheet());
+        resize.addActionListener(e -> doCreateArray());
+        names.addActionListener(e -> openNamedCellsPopup());
+        saveAs.addActionListener(e -> doSaveSheetAs());
+        importItem.addActionListener(e -> doImportSheet());
+        menu.add(delete);
+        menu.add(resize);
+        menu.add(names);
+        menu.addSeparator();
+        menu.add(saveAs);
+        menu.add(importItem);
+        return menu;
+    }
+
+    /**
+     * Asks for a file and saves the selected sheet on its own, in the same
+     * single-sheet format SheetGui writes (no book context).
+     */
+    private void doSaveSheetAs() {
+        SheetView v = current();
+        if (v == null) {
+            setStatus("There is no sheet to save.");
+            return;
+        }
+        JFileChooser fc = new JFileChooser();
+        if (currentDir != null) {
+            fc.setCurrentDirectory(currentDir);
+        }
+        if (fc.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        saveSheetAs(fc.getSelectedFile().toPath());
+    }
+
+    /**
+     * Writes the selected sheet as a one-sheet workbook (a fresh one-sheet book
+     * is built from a copy of the sheet's content and serialized).
+     */
+    private void saveSheetAs(Path target) {
+        SheetView v = current();
+        if (v == null) {
+            setStatus("There is no sheet to save.");
+            return;
+        }
+        try {
+            SheetBook single = new SheetBook();
+            Sheet copy = single.add(new Sheet());
+            copy.install(MathFunctions.createRegistry());
+            copySheet(v.sheet, copy);
+            String xml = WorkbookIO.toXml(single, varsArea.getText(), null, null,
+                    List.of(dataColumnWidths(v.grid)));
+            Files.writeString(target, xml);
+            setStatus("Sheet '" + v.sheet.name() + "' saved to " + target.getFileName());
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    /**
+     * Asks for a single-sheet (SheetGui) file and adds it to this book as a new
+     * sheet, named after its place in the display order.
+     */
+    private void doImportSheet() {
+        JFileChooser fc = new JFileChooser();
+        if (currentDir != null) {
+            fc.setCurrentDirectory(currentDir);
+        }
+        if (fc.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        importSheet(fc.getSelectedFile().toPath());
+    }
+
+    /** Imports a single sheet saved without book context into this book. */
+    private void importSheet(Path source) {
+        try {
+            WorkbookIO.LoadedWorkbook loaded = WorkbookIO.fromXml(Files.readString(source));
+            if (loaded.sheets.isEmpty()) {
+                throw new IllegalArgumentException("The file contains no sheet.");
+            }
+            WorkbookIO.LoadedSheet ls = loaded.sheets.get(0);
+            String name = nextSheetName();
+            SheetView v = createSheetView();
+            v.sheet.setName(name);
+            v.model.setSheetSize(ls.rows, ls.cols);
+            installRenderers(v);
+            resizeRowNumberColumn(v.grid, ls.rows);
+            applyColumnWidths(v.grid, ls.columnWidths);
+            for (WorkbookIO.LoadedCell lc : ls.cells) {
+                v.sheet.restoreCell(lc);
+            }
+            v.sheet.setNamedRefs(ls.names);
+            v.sheet.setNamedRanges(ls.ranges);
+            v.sheet.setBindingsText(varsArea.getText());
+            if (!loaded.fullyStored) {
+                v.sheet.recomputeAll();
+            }
+            tabs.addTab(v.sheet.name(), scrollFor(v));
+            tabs.setSelectedIndex(tabs.getTabCount() - 1);
+            updateGridSizeFields();
+            setStatus("Imported sheet from " + source.getFileName() + ".");
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    /**
+     * Copies the content of {@code src} - raw text, formulas (re-parsed so the
+     * copy carries its expression tree), names, ranges, formats and alignment -
+     * into the freshly created {@code dst}. Used to write a sheet without book
+     * context.
+     */
+    private static void copySheet(Sheet src, Sheet dst) {
+        dst.setName(src.name());
+        dst.setSize(src.rows(), src.cols());
+        for (int r = 0; r < src.rows(); r++) {
+            for (int c = 1; c <= src.cols(); c++) {
+                Cell cell = src.cell(r, c);
+                String raw = cell.getRawExpression();
+                String gridText = src.getRawValue(r, c);
+                String fmt = src.getFormatPattern(r, c);
+                String al = src.getAlignment(r, c);
+                if (cell.getExpression() != null && raw != null && !raw.isEmpty()) {
+                    try {
+                        Node node = Expression.parse(raw, dst.registry()).getOptimized();
+                        // Store the unformatted value as the grid text so it parses
+                        // back to the same number (the format pattern re-renders it).
+                        String valueText = cell.getValue() == null ? "" : Cell.encodeValue(cell.getValue());
+                        dst.saveCell(r, c, valueText, raw, node, cell.getType(),
+                                node.collectReferenced(), fmt, al);
+                        continue;
+                    } catch (RuntimeException ignored) {
+                        // fall through and copy it as a literal
+                    }
+                }
+                if (gridText != null && !gridText.isEmpty()) {
+                    dst.setRawValue(r, c, gridText);
+                    if (fmt != null) {
+                        dst.setFormatPattern(r, c, fmt);
+                    }
+                    if (al != null) {
+                        dst.setAlignment(r, c, al);
+                    }
+                }
+            }
+        }
+        for (Map.Entry<String, CellRef> e : src.namedRefs().entrySet()) {
+            dst.setCellName(e.getValue().getRow(), e.getValue().getCol() + 1, e.getKey());
+        }
+        for (Map.Entry<String, CellRect> e : src.namedRanges().entrySet()) {
+            CellRect rect = e.getValue().normalize(src.sheetIndex());
+            dst.setRangeName(rect.getRow0(), rect.getCol0() + 1, rect.getRow1(), rect.getCol1() + 1, e.getKey());
         }
     }
 

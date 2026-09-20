@@ -38,11 +38,15 @@ public final class WorkbookIO {
         public final int rows;
         public final int cols;
         public String name;
+        /** Stable unique identifier of the sheet, or null when the file has none. */
+        public String uuid;
         public final List<LoadedCell> cells = new ArrayList<>();
         /** Named cell references restored from the XML: name -> CellRef (0-based, sheet 0). */
         public final Map<String, CellRef> names = new LinkedHashMap<>();
         /** Named rectangular ranges restored from the XML: name -> CellRect (0-based, sheet 0). */
         public final Map<String, CellRect> ranges = new LinkedHashMap<>();
+        /** Saved data-column widths of the sheet's grid (presentation), in order. */
+        public final List<Integer> columnWidths = new ArrayList<>();
 
         public LoadedSheet(int rows, int cols) {
             this.rows = rows;
@@ -102,10 +106,10 @@ public final class WorkbookIO {
          * workbook can be restored without recalculating anything.
          */
         public boolean fullyStored = true;
-        /** Saved sheet (tab) order as 0-based positions into {@link #sheets}. */
-        public final List<Integer> visualOrder = new ArrayList<>();
-        /** Saved active tab position (0-based), or -1 when none was saved. */
-        public int activeSheet = -1;
+        /** Saved sheet (tab) order as the sheets' UUIDs, or empty. */
+        public final List<String> visualOrder = new ArrayList<>();
+        /** Saved active tab as the sheet's UUID, or null. */
+        public String activeSheet;
 
         public LoadedWorkbook(String variablesText) {
             this.variablesText = variablesText;
@@ -117,17 +121,28 @@ public final class WorkbookIO {
 
     /** Serializes the workbook without a saved tab order or active tab. */
     public static String toXml(SheetBook book, String variablesText) {
-        return toXml(book, variablesText, null, -1);
+        return toXml(book, variablesText, null, null, null);
     }
 
     /**
-     * Serializes the workbook. {@code visualOrder} lists the 0-based sheet
-     * positions in the order their tabs are shown and {@code activeTab} is the
-     * selected tab position (or -1); both are written to the presentation section
-     * and are only needed to reopen the Book GUI exactly as it was arranged.
+     * Serializes the workbook. {@code visualOrder} lists the sheets' UUIDs in the
+     * order their tabs are shown and {@code activeSheet} is the UUID of the
+     * selected sheet; both are written to the presentation section and are only
+     * needed to reopen the GUI exactly as it was arranged.
      */
     public static String toXml(SheetBook book, String variablesText,
-                               List<Integer> visualOrder, int activeTab) {
+                               List<String> visualOrder, String activeSheet) {
+        return toXml(book, variablesText, visualOrder, activeSheet, null);
+    }
+
+    /**
+     * Serializes the workbook. {@code columnWidths} optionally holds, per sheet
+     * (in book order), the widths of the grid's data columns; they are written to
+     * the presentation section so a GUI can restore the columns as they were.
+     */
+    public static String toXml(SheetBook book, String variablesText,
+                               List<String> visualOrder, String activeSheet,
+                               List<List<Integer>> columnWidths) {
         try {
             DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
             DocumentBuilder db = dbf.newDocumentBuilder();
@@ -151,21 +166,21 @@ public final class WorkbookIO {
             Element presEl = doc.createElement("presentation");
             if (visualOrder != null && !visualOrder.isEmpty()) {
                 StringBuilder order = new StringBuilder();
-                for (Integer idx : visualOrder) {
-                    if (idx == null) {
+                for (String id : visualOrder) {
+                    if (id == null || id.isEmpty()) {
                         continue;
                     }
                     if (order.length() > 0) {
                         order.append(';');
                     }
-                    order.append(idx + 1);          // 1-based sheet position
+                    order.append(id);
                 }
                 if (order.length() > 0) {
                     presEl.setAttribute("order", order.toString());
                 }
             }
-            if (activeTab >= 0) {
-                presEl.setAttribute("active", String.valueOf(activeTab + 1));   // 1-based tab
+            if (activeSheet != null && !activeSheet.isEmpty()) {
+                presEl.setAttribute("active", activeSheet);
             }
             root.appendChild(presEl);
             Element presSheetsEl = doc.createElement("sheets");
@@ -177,6 +192,7 @@ public final class WorkbookIO {
                 Element sheetEl = doc.createElement("sheet");
                 sheetEl.setAttribute("rows", String.valueOf(sheet.rows()));
                 sheetEl.setAttribute("cols", String.valueOf(sheet.cols()));
+                sheetEl.setAttribute("id", sheet.uuid());
                 if (sheetName != null && !sheetName.isEmpty()) {
                     sheetEl.setAttribute("name", sheetName);
                 }
@@ -186,6 +202,23 @@ public final class WorkbookIO {
                 Element presSheetEl = doc.createElement("sheet");
                 if (sheetName != null && !sheetName.isEmpty()) {
                     presSheetEl.setAttribute("name", sheetName);
+                }
+                List<Integer> widths = columnWidths != null && s < columnWidths.size()
+                        ? columnWidths.get(s) : null;
+                if (widths != null && !widths.isEmpty()) {
+                    StringBuilder sb = new StringBuilder();
+                    for (Integer w : widths) {
+                        if (w == null) {
+                            continue;
+                        }
+                        if (sb.length() > 0) {
+                            sb.append(';');
+                        }
+                        sb.append(w);
+                    }
+                    if (sb.length() > 0) {
+                        presSheetEl.setAttribute("widths", sb.toString());
+                    }
                 }
                 Element presCellsEl = doc.createElement("cells");
                 presSheetEl.appendChild(presCellsEl);
@@ -303,33 +336,31 @@ public final class WorkbookIO {
             Element sheetsEl = split ? childElement(calcEl, "sheets") : firstChild(doc, "sheets");
             // Presentation cells per sheet, keyed "row,col" (0-based).
             List<Map<String, Element>> presentation = new ArrayList<>();
+            List<List<Integer>> presentationWidths = new ArrayList<>();
             if (split) {
                 Element presSection = childElement(root, "presentation");
                 if (presSection != null) {
                     String order = presSection.getAttribute("order");
                     if (order != null && !order.isEmpty()) {
                         for (String part : order.split(";")) {
-                            try {
-                                wb.visualOrder.add(Integer.parseInt(part.trim()) - 1);
-                            } catch (NumberFormatException ignored) {
-                                // skip a malformed order entry
+                            String id = part.trim();
+                            if (!id.isEmpty()) {
+                                wb.visualOrder.add(id);
                             }
                         }
                     }
                     String active = presSection.getAttribute("active");
-                    if (active != null && !active.isEmpty()) {
-                        try {
-                            wb.activeSheet = Integer.parseInt(active.trim()) - 1;
-                        } catch (NumberFormatException ignored) {
-                            // skip a malformed active tab
-                        }
+                    if (active != null && !active.trim().isEmpty()) {
+                        wb.activeSheet = active.trim();
                     }
                 }
                 Element presSheetsEl = presSection == null ? null : childElement(presSection, "sheets");
                 if (presSheetsEl != null) {
                     NodeList presSheets = presSheetsEl.getElementsByTagName("sheet");
                     for (int i = 0; i < presSheets.getLength(); i++) {
-                        presentation.add(cellsByKey((Element) presSheets.item(i)));
+                        Element presSheetEl = (Element) presSheets.item(i);
+                        presentation.add(cellsByKey(presSheetEl));
+                        presentationWidths.add(parseWidths(strAttr(presSheetEl, "widths")));
                     }
                 }
             }
@@ -343,6 +374,10 @@ public final class WorkbookIO {
                     int cols = intAttr(sheetEl, "cols");
                     LoadedSheet ls = new LoadedSheet(rows, cols);
                     ls.name = strAttr(sheetEl, "name");
+                    ls.uuid = strAttr(sheetEl, "id");
+                    if (i < presentationWidths.size()) {
+                        ls.columnWidths.addAll(presentationWidths.get(i));
+                    }
                     NodeList nameNodes = sheetEl.getElementsByTagName("named");
                     for (int j = 0; j < nameNodes.getLength(); j++) {
                         Element nameEl = (Element) nameNodes.item(j);
@@ -351,13 +386,14 @@ public final class WorkbookIO {
                             continue;
                         }
                         if (nameEl.hasAttribute("row2")) {
-                            ls.ranges.put(ref, new CellRect(0,
+                            ls.ranges.put(ref, new CellRect(CellRect.CURRENT_SHEET,
                                     intAttr(nameEl, "row") - 1,
                                     intAttr(nameEl, "col") - 1,
                                     intAttr(nameEl, "row2") - 1,
                                     intAttr(nameEl, "col2") - 1));
                         } else {
-                            ls.names.put(ref, new CellRef(0, intAttr(nameEl, "row") - 1, intAttr(nameEl, "col") - 1));
+                            ls.names.put(ref, new CellRef(CellRef.CURRENT_SHEET,
+                                    intAttr(nameEl, "row") - 1, intAttr(nameEl, "col") - 1));
                         }
                     }
                     NodeList cellNodes = sheetEl.getElementsByTagName("cell");
@@ -473,6 +509,22 @@ public final class WorkbookIO {
             map.put((intAttr(cellEl, "row") - 1) + "," + (intAttr(cellEl, "col") - 1), cellEl);
         }
         return map;
+    }
+
+    /** Parses a semicolon-separated list of column widths; empty when null/blank. */
+    private static List<Integer> parseWidths(String text) {
+        List<Integer> out = new ArrayList<>();
+        if (text == null || text.isEmpty()) {
+            return out;
+        }
+        for (String part : text.split(";")) {
+            try {
+                out.add(Integer.parseInt(part.trim()));
+            } catch (NumberFormatException ignored) {
+                // skip a malformed width
+            }
+        }
+        return out;
     }
 
     /** Compact, semicolon-separated form of a cell reference list, e.g. "S1(2,3);S2(1,1)". */

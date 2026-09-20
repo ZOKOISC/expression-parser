@@ -36,6 +36,8 @@ public class Sheet implements CellProvider {
     private final Map<String, String> formatPatterns = new LinkedHashMap<>();
     private final Map<String, String> alignments = new LinkedHashMap<>();
     private String name = "";
+    /** Stable unique identifier of this sheet (persisted; used as the sheet identity). */
+    private String uuid = java.util.UUID.randomUUID().toString();
     /** Named cell references of this sheet: name -> normalized CellRef (0-based). */
     private final Map<String, CellRef> namedRefs = new LinkedHashMap<>();
     /** Named rectangular ranges of this sheet: name -> normalized CellRect (0-based). */
@@ -88,6 +90,18 @@ public class Sheet implements CellProvider {
         this.name = name == null ? "" : name.trim();
         if (book != null) {
             book.refreshAllSheetNameBindings();
+        }
+    }
+
+    /** The stable unique identifier of this sheet. */
+    public String uuid() {
+        return uuid;
+    }
+
+    /** Restores the saved identifier; ignored when null or blank. */
+    public void setUuid(String id) {
+        if (id != null && !id.isBlank()) {
+            this.uuid = id;
         }
     }
 

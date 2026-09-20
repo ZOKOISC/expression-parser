@@ -209,6 +209,7 @@ public class SheetAPI implements AutoCloseable {
         sheet.install(MathFunctions.createRegistry());
         WorkbookIO.LoadedSheet ls = loaded.sheets.get(0);
         sheet.setName(ls.name);
+        sheet.setUuid(ls.uuid);
         sheet.setSize(ls.rows, ls.cols);
         for (WorkbookIO.LoadedCell lc : ls.cells) {
             sheet.restoreCell(lc);

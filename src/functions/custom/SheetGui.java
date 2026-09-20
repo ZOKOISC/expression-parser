@@ -6,6 +6,7 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Frame;
 import java.awt.GridLayout;
+import java.awt.Insets;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -18,8 +19,11 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 
 import javax.swing.BorderFactory;
+import javax.swing.border.Border;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
@@ -70,8 +74,8 @@ public class SheetGui {
     private final JTextArea varsArea = new JTextArea(5, 40);
     private final JLabel status = new JLabel(" ");
     private final JLabel typeLabel = new JLabel(" ");
-    private final JTextField rowsField = new JTextField("3", 3);
-    private final JTextField colsField = new JTextField("3", 3);
+    /** Read-only display of the sheet's size, e.g. "3,4" (rows,columns). */
+    private final JTextField sizeField = new JTextField("3,3", 5);
     private final JScrollPane gridPane = new JScrollPane();
     private JFrame frame;
     /** Folder the current workbook was loaded from (save dialog starts here). */
@@ -118,19 +122,16 @@ public class SheetGui {
         varsPanel.add(varsScroll, BorderLayout.CENTER);
 
         JPanel arrayControls = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
-        arrayControls.add(new JLabel("Grid size: rows"));
-        rowsField.setFont(mono);
-        colsField.setFont(mono);
-        arrayControls.add(rowsField);
-        arrayControls.add(new JLabel("columns"));
-        arrayControls.add(colsField);
-        JButton btnResize = new JButton("Resize Grid");
-        JButton btnSave = new JButton("Save XML");
-        JButton btnOpen = new JButton("Open XML");
+        arrayControls.add(new JLabel("Size: ["));
+        sizeField.setFont(mono);
+        // Read-only display of the sheet's size as "<rows>,<columns>".
+        sizeField.setEditable(false);
+        sizeField.setHorizontalAlignment(JTextField.CENTER);
+        arrayControls.add(sizeField);
+        arrayControls.add(new JLabel("]"));
+        JButton btnResize = new JButton("Resize");
         JButton btnNames = new JButton("Named cells");
         arrayControls.add(btnResize);
-        arrayControls.add(btnSave);
-        arrayControls.add(btnOpen);
         arrayControls.add(btnNames);
         typeLabel.setFont(mono);
         arrayControls.add(typeLabel);
@@ -147,6 +148,10 @@ public class SheetGui {
 
         gridPane.setViewportView(view.grid);
         gridPane.setPreferredSize(new Dimension(600, 300));
+        // As-needed scrollbars: when the (resizable) window is too small to show
+        // every column at its preset width or every row, the grid scrolls.
+        gridPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        gridPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         frame.add(gridPane, BorderLayout.CENTER);
         frame.add(status, BorderLayout.SOUTH);
         frame.setSize(700, 560);
@@ -154,9 +159,8 @@ public class SheetGui {
         frame.setVisible(true);
 
         btnResize.addActionListener(e -> doResizeGrid());
-        btnSave.addActionListener(e -> doSaveXml());
-        btnOpen.addActionListener(e -> doOpenXml());
         btnNames.addActionListener(e -> openNamedCellsPopup());
+        updateGridSizeFields();
     }
 
     /**
@@ -205,6 +209,11 @@ public class SheetGui {
         // selected via the row-number column and the column headers instead.
         v.grid.setCellSelectionEnabled(true);
         v.grid.getTableHeader().setReorderingAllowed(false);
+        // Column widths are independent of the window: resizing the window keeps
+        // the widths, and any column (including the last) can be resized without
+        // changing the window width (a horizontal scrollbar appears if needed).
+        v.grid.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
+        v.grid.getTableHeader().setResizingAllowed(true);
         v.grid.getModel().addTableModelListener(e -> {
             if (e.getType() == TableModelEvent.UPDATE && e.getColumn() > 0 && e.getFirstRow() >= 0) {
                 Cell cell = v.sheet.handleCellUpdate(e.getFirstRow(), e.getColumn(),
@@ -368,10 +377,31 @@ public class SheetGui {
                     }
                 }
                 setHorizontalAlignment(swingAlign);
+                padAlignedSide(swingAlign);
             } else {
                 setHorizontalAlignment(SwingConstants.CENTER);
             }
             return this;
+        }
+
+        /**
+         * Adds a one-character inset on the aligned side - from the left for
+         * left-aligned values, from the right for right-aligned values - on top
+         * of the renderer's default cell border, so the text is not flush with
+         * the cell edge. Centered/other cells keep the default border.
+         */
+        private void padAlignedSide(int align) {
+            if (align != SwingConstants.LEFT && align != SwingConstants.RIGHT) {
+                return;
+            }
+            int pad = getFontMetrics(getFont()).charWidth('0');
+            Border base = getBorder();
+            Insets ins = base == null ? new Insets(1, 1, 1, 1) : base.getBorderInsets(this);
+            if (align == SwingConstants.RIGHT) {
+                setBorder(BorderFactory.createEmptyBorder(ins.top, ins.left, ins.bottom, ins.right + pad));
+            } else {
+                setBorder(BorderFactory.createEmptyBorder(ins.top, ins.left + pad, ins.bottom, ins.right));
+            }
         }
     }
 
@@ -384,12 +414,16 @@ public class SheetGui {
     }
 
     private void doResizeGrid() {
+        int[] dim = promptDimensions("Resize grid", view.sheet.rows(), view.sheet.cols());
+        if (dim == null) {
+            return;
+        }
+        resizeGrid(dim[0], dim[1]);
+    }
+
+    /** Resizes the grid, confirming first when used cells would be discarded. */
+    private void resizeGrid(int rows, int cols) {
         try {
-            int rows = Integer.parseInt(rowsField.getText().trim());
-            int cols = Integer.parseInt(colsField.getText().trim());
-            if (rows < 1 || cols < 1 || rows > 100 || cols > 100) {
-                throw new IllegalArgumentException("Rows and columns must be between 1 and 100.");
-            }
             int lost = view.sheet.lostCellsIfResizedTo(rows, cols);
             if (lost > 0) {
                 int choice = JOptionPane.showConfirmDialog(
@@ -407,10 +441,65 @@ public class SheetGui {
             view.model.setSheetSize(rows, cols);
             installRenderers(view);
             resizeRowNumberColumn(view.grid, rows);
+            updateGridSizeFields();
             setStatus("Grid resized: " + rows + "x" + cols + ". Fill the cells and use get(row,col).");
         } catch (Exception ex) {
             showError(ex);
         }
+    }
+
+    /**
+     * Asks for a grid size (rows x columns), pre-filled with the given defaults.
+     * Returns {rows, cols}, or null when the user cancels or enters something
+     * outside 1..100.
+     */
+    private int[] promptDimensions(String title, int defaultRows, int defaultCols) {
+        JTextField rowsInput = new JTextField(String.valueOf(defaultRows), 5);
+        JTextField colsInput = new JTextField(String.valueOf(defaultCols), 5);
+        JPanel panel = new JPanel(new GridLayout(0, 1, 4, 4));
+        panel.add(new JLabel("Number of rows:"));
+        panel.add(rowsInput);
+        panel.add(new JLabel("Number of columns:"));
+        panel.add(colsInput);
+        int choice = JOptionPane.showConfirmDialog(frame, panel, title,
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (choice != JOptionPane.OK_OPTION) {
+            return null;
+        }
+        try {
+            int rows = Integer.parseInt(rowsInput.getText().trim());
+            int cols = Integer.parseInt(colsInput.getText().trim());
+            String error = dimensionError(rows, cols);
+            if (error != null) {
+                throw new IllegalArgumentException(error);
+            }
+            return new int[]{rows, cols};
+        } catch (NumberFormatException ex) {
+            showError(new IllegalArgumentException("Rows and columns must be whole numbers."));
+            return null;
+        } catch (IllegalArgumentException ex) {
+            showError(ex);
+            return null;
+        }
+    }
+
+    /**
+     * An error message when the grid dimensions are invalid, or null when they
+     * are fine. The number of rows is not capped; columns are limited to 100.
+     */
+    private static String dimensionError(int rows, int cols) {
+        if (rows < 1) {
+            return "The number of rows must be 1 or more.";
+        }
+        if (cols < 1 || cols > 100) {
+            return "The number of columns must be between 1 and 100.";
+        }
+        return null;
+    }
+
+    /** Shows the sheet's size (rows,columns) in the read-only display field. */
+    private void updateGridSizeFields() {
+        sizeField.setText(view.sheet.rows() + "," + view.sheet.cols());
     }
 
     /**
@@ -422,32 +511,11 @@ public class SheetGui {
      * variables text is kept.
      */
     private void doNewSheet() {
-        JTextField rowsInput = new JTextField("2", 5);
-        JTextField colsInput = new JTextField("4", 5);
-        JPanel panel = new JPanel(new GridLayout(0, 1, 4, 4));
-        panel.add(new JLabel("Number of rows:"));
-        panel.add(rowsInput);
-        panel.add(new JLabel("Number of columns:"));
-        panel.add(colsInput);
-        int choice = JOptionPane.showConfirmDialog(frame, panel, "New sheet dimensions",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (choice != JOptionPane.OK_OPTION) {
+        int[] dim = promptDimensions("New sheet dimensions", 2, 4);
+        if (dim == null) {
             return;
         }
-        int rows;
-        int cols;
-        try {
-            rows = Integer.parseInt(rowsInput.getText().trim());
-            cols = Integer.parseInt(colsInput.getText().trim());
-        } catch (NumberFormatException ex) {
-            showError(new IllegalArgumentException("Rows and columns must be whole numbers."));
-            return;
-        }
-        if (rows < 1 || cols < 1 || rows > 100 || cols > 100) {
-            showError(new IllegalArgumentException("Rows and columns must be between 1 and 100."));
-            return;
-        }
-        newSheet(rows, cols);
+        newSheet(dim[0], dim[1]);
     }
 
     /**
@@ -464,8 +532,7 @@ public class SheetGui {
         resizeRowNumberColumn(view.grid, rows);
         gridPane.setViewportView(view.grid);
         view.sheet.setBindingsText(varsArea.getText());
-        rowsField.setText(String.valueOf(rows));
-        colsField.setText(String.valueOf(cols));
+        updateGridSizeFields();
         currentFile = null;
         updateTitle();
         setStatus("New empty sheet created: " + rows + "x" + cols + ".");
@@ -615,7 +682,34 @@ public class SheetGui {
         int digits = String.valueOf(rows).length();
         int w = digits * 8 + 12;
         grid.getColumnModel().getColumn(0).setPreferredWidth(w);
+        grid.getColumnModel().getColumn(0).setMinWidth(w);
         grid.getColumnModel().getColumn(0).setMaxWidth(w);
+        grid.getColumnModel().getColumn(0).setResizable(false);   // row-number column is fixed
+    }
+
+    /** The current widths of the grid's data columns (column 0 holds the row numbers). */
+    private static List<Integer> dataColumnWidths(JTable grid) {
+        List<Integer> widths = new ArrayList<>();
+        for (int i = 1; i < grid.getColumnModel().getColumnCount(); i++) {
+            widths.add(grid.getColumnModel().getColumn(i).getWidth());
+        }
+        return widths;
+    }
+
+    /** Restores saved data-column widths on the grid; missing/extra entries are ignored. */
+    private static void applyColumnWidths(JTable grid, List<Integer> widths) {
+        if (widths == null || widths.isEmpty()) {
+            return;
+        }
+        int count = Math.min(widths.size(), grid.getColumnModel().getColumnCount() - 1);
+        for (int i = 0; i < count; i++) {
+            Integer w = widths.get(i);
+            if (w == null || w <= 0) {
+                continue;
+            }
+            grid.getColumnModel().getColumn(i + 1).setPreferredWidth(w);
+            grid.getColumnModel().getColumn(i + 1).setWidth(w);
+        }
     }
 
     /**
@@ -650,7 +744,8 @@ public class SheetGui {
 
     private void saveTo(Path target) {
         try {
-            String xml = WorkbookIO.toXml(book, varsArea.getText());
+            List<List<Integer>> widths = List.of(dataColumnWidths(view.grid));
+            String xml = WorkbookIO.toXml(book, varsArea.getText(), null, null, widths);
             Files.writeString(target, xml);
             currentFile = target.toAbsolutePath().normalize();
             currentDir = currentFile.getParent() != null ? currentFile.getParent().toFile() : null;
@@ -719,9 +814,12 @@ public class SheetGui {
         varsArea.setText(loaded.variablesText);
         view = createSheetView();
         view.sheet.setName(ls.name);
+        view.sheet.setUuid(ls.uuid);
         view.model.setSheetSize(ls.rows, ls.cols);
         installRenderers(view);
         resizeRowNumberColumn(view.grid, ls.rows);
+        applyColumnWidths(view.grid, ls.columnWidths);
+        updateGridSizeFields();
         gridPane.setViewportView(view.grid);
         view.sheet.setNamedRefs(ls.names);
         view.sheet.setNamedRanges(ls.ranges);
