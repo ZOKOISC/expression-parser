@@ -230,6 +230,22 @@ public class SheetApiSample {
             System.out.println("   OK malformed xml text throws: " + expected.getMessage());
         }
 
+        // d4) the saved XML carries the optimized expression trees plus the
+        //     referenced sets and the ordered recalculation lists, and loading it
+        //     back uses the stored values instead of recalculating
+        System.out.println();
+        System.out.println("=== 6d. Saved expression state and reload without recalculating ===");
+        String storedXml = Files.readString(savedFile);
+        check(storedXml.contains("<expr"), true, "optimized expression trees persisted");
+        check(storedXml.contains("refs=\""), true, "referenced sets persisted");
+        check(storedXml.contains("deps=\""), true, "recalculation lists persisted");
+        String changedVars = storedXml.replace("<variables>x = 4</variables>", "<variables>x = 40</variables>");
+        check(!changedVars.equals(storedXml), true, "variables text replaced for the no-recalc test");
+        try (SheetAPI stale = SheetAPI.loadSheet(changedVars)) {
+            List<SheetAPI.CellResult> storedC2 = stale.getCellValues(List.of(SheetAPI.ref(2, 3)));
+            check(storedC2.get(0).value(), 22.0, "reload keeps the stored C2 = 22 (not recalculated)");
+        }
+
         // e) close: the API object is dead afterwards
         System.out.println();
         System.out.println("=== 7. close() ===");

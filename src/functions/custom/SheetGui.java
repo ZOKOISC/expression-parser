@@ -726,11 +726,12 @@ public class SheetGui {
         view.sheet.setNamedRefs(ls.names);
         view.sheet.setNamedRanges(ls.ranges);
         for (WorkbookIO.LoadedCell lc : ls.cells) {
-            view.sheet.restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
-                    lc.type, lc.formatPattern, lc.alignment);
+            view.sheet.restoreCell(lc);
         }
         view.sheet.setBindingsText(varsArea.getText());
-        view.sheet.recomputeAll();
+        if (!loaded.fullyStored) {
+            view.sheet.recomputeAll();
+        }
         view.grid.repaint();
         currentFile = sourceFile == null ? null : sourceFile.toAbsolutePath().normalize();
         updateTitle();

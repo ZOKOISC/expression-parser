@@ -345,13 +345,14 @@ WorkbookIO.LoadedWorkbook loadedWb = WorkbookIO.fromXml(wbXml);
         restored.install(MathFunctions.createRegistry());
         restored.setSize(loadedWb.sheets.get(0).rows, loadedWb.sheets.get(0).cols);
         for (WorkbookIO.LoadedCell lc : loadedWb.sheets.get(0).cells) {
-            restored.restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
-                    lc.type, lc.formatPattern, lc.alignment);
+            restored.restoreCell(lc);
         }
         restored.setNamedRefs(loadedWb.sheets.get(0).names);
         restored.setNamedRanges(loadedWb.sheets.get(0).ranges);
         restored.setBindingsText(loadedWb.variablesText);
-        restored.recomputeAll();
+        if (!loadedWb.fullyStored) {
+            restored.recomputeAll();
+        }
         assertCell(restored, 0, 1, "13");
         assertCell(restored, 0, 2, "hello");
         assertCell(restored, 0, 3, "true");

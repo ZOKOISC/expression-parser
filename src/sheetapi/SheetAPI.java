@@ -211,13 +211,14 @@ public class SheetAPI implements AutoCloseable {
         sheet.setName(ls.name);
         sheet.setSize(ls.rows, ls.cols);
         for (WorkbookIO.LoadedCell lc : ls.cells) {
-            sheet.restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
-                    lc.type, lc.formatPattern, lc.alignment);
+            sheet.restoreCell(lc);
         }
         sheet.setNamedRefs(ls.names);
         sheet.setNamedRanges(ls.ranges);
         sheet.setBindingsText(loaded.variablesText);
-        sheet.recomputeAll();
+        if (!loaded.fullyStored) {
+            sheet.recomputeAll();
+        }
         return new State(book, sheet, loaded.variablesText, sourceXmlPath);
     }
 

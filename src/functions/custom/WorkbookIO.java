@@ -23,6 +23,7 @@ import org.w3c.dom.NodeList;
 import expr.CellRect;
 import expr.CellRef;
 import expr.DataType;
+import expr.Node;
 
 /**
  * Saves and restores the actual content of a {@link SheetBook} (the variables
@@ -49,7 +50,12 @@ public final class WorkbookIO {
         }
     }
 
-    /** One restored cell: grid text, raw expression, type, format, alignment. */
+    /**
+     * One restored cell: grid text, raw expression, type, format, alignment and
+     * - for formula cells written by the current version - the concise internal
+     * state (optimized tree, referenced set, ordered recalculation list, value
+     * and error) so the cell can be restored without recalculating.
+     */
     public static final class LoadedCell {
         public final int row;
         public final int col;
@@ -58,9 +64,20 @@ public final class WorkbookIO {
         public final DataType type;
         public final String formatPattern;
         public final String alignment;
+        /** Optimized expression tree, or null when the file has no stored tree. */
+        public final Node expression;
+        /** Cells this expression references (dependency set). */
+        public final List<CellRef> referenced;
+        /** Ordered list of cells to recalculate when this cell changes. */
+        public final List<CellRef> dependents;
+        /** Canonical already-computed value, or null. */
+        public final String value;
+        /** Saved evaluation error message, or null. */
+        public final String error;
 
         public LoadedCell(int row, int col, String text, String rawExpression, DataType type,
-                   String formatPattern, String alignment) {
+                   String formatPattern, String alignment, Node expression,
+                   List<CellRef> referenced, List<CellRef> dependents, String value, String error) {
             this.row = row;
             this.col = col;
             this.text = text;
@@ -68,6 +85,11 @@ public final class WorkbookIO {
             this.type = type;
             this.formatPattern = formatPattern;
             this.alignment = alignment;
+            this.expression = expression;
+            this.referenced = referenced;
+            this.dependents = dependents;
+            this.value = value;
+            this.error = error;
         }
     }
 
@@ -75,6 +97,11 @@ public final class WorkbookIO {
     public static final class LoadedWorkbook {
         public final String variablesText;
         public final List<LoadedSheet> sheets = new ArrayList<>();
+        /**
+         * True when every formula cell carried its saved expression tree, so the
+         * workbook can be restored without recalculating anything.
+         */
+        public boolean fullyStored = true;
 
         public LoadedWorkbook(String variablesText) {
             this.variablesText = variablesText;
@@ -131,6 +158,28 @@ public final class WorkbookIO {
                         String alignment = sheet.getAlignment(r, c);
                         if (alignment != null && !alignment.isEmpty()) {
                             cellEl.setAttribute("align", alignment);
+                        }
+                        // Concise internal state so a reload does not recalculate:
+                        // the optimized expression tree plus the referenced set and
+                        // the ordered list of cells to recalculate on a change.
+                        if (cell != null) {
+                            if (cell.getExpression() != null) {
+                                cellEl.setAttribute("value", Cell.encodeValue(cell.getValue()));
+                                if (cell.getErrorMessage() != null && !cell.getErrorMessage().isEmpty()) {
+                                    cellEl.setAttribute("error", cell.getErrorMessage());
+                                }
+                                Element exprEl = doc.createElement("expr");
+                                exprEl.appendChild(cell.getExpression().toXml(doc));
+                                cellEl.appendChild(exprEl);
+                            }
+                            String refs = joinRefs(cell.getReferenced());
+                            if (!refs.isEmpty()) {
+                                cellEl.setAttribute("refs", refs);
+                            }
+                            String deps = joinRefs(cell.getDependents());
+                            if (!deps.isEmpty()) {
+                                cellEl.setAttribute("deps", deps);
+                            }
                         }
                         sheetEl.appendChild(cellEl);
                     }
@@ -215,14 +264,37 @@ public final class WorkbookIO {
                     NodeList cellNodes = sheetEl.getElementsByTagName("cell");
                     for (int j = 0; j < cellNodes.getLength(); j++) {
                         Element cellEl = (Element) cellNodes.item(j);
+                        String text = strAttr(cellEl, "text");
+                        String raw = strAttr(cellEl, "raw");
+                        Element exprEl = childElement(cellEl, "expr");
+                        Node expression = null;
+                        if (exprEl != null) {
+                            Element nodeEl = firstChildElement(exprEl);
+                            if (nodeEl != null) {
+                                try {
+                                    expression = Node.fromXml(nodeEl);
+                                } catch (RuntimeException ex) {
+                                    expression = null;
+                                }
+                            }
+                        }
+                        boolean isFormula = raw != null && (text == null || !raw.equals(text));
+                        if (isFormula && expression == null) {
+                            wb.fullyStored = false;   // fall back to recalculating
+                        }
                         ls.cells.add(new LoadedCell(
                                 intAttr(cellEl, "row") - 1,
                                 intAttr(cellEl, "col") - 1,
-                                strAttr(cellEl, "text"),
-                                strAttr(cellEl, "raw"),
+                                text,
+                                raw,
                                 typeAttr(cellEl, "type"),
                                 strAttr(cellEl, "format"),
-                                strAttr(cellEl, "align")));
+                                strAttr(cellEl, "align"),
+                                expression,
+                                parseRefs(strAttr(cellEl, "refs")),
+                                parseRefs(strAttr(cellEl, "deps")),
+                                strAttr(cellEl, "value"),
+                                strAttr(cellEl, "error")));
                     }
                     wb.sheets.add(ls);
                 }
@@ -259,6 +331,83 @@ public final class WorkbookIO {
         try {
             return DataType.valueOf(v.trim());
         } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** The first direct child element with the given tag, or null. */
+    private static Element childElement(Element parent, String tag) {
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            if (children.item(i) instanceof Element e && tag.equals(e.getTagName())) {
+                return e;
+            }
+        }
+        return null;
+    }
+
+    /** The first direct child element of any tag, or null. */
+    private static Element firstChildElement(Element parent) {
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            if (children.item(i) instanceof Element e) {
+                return e;
+            }
+        }
+        return null;
+    }
+
+    /** Compact, semicolon-separated form of a cell reference list, e.g. "S1(2,3);S2(1,1)". */
+    private static String joinRefs(java.util.Collection<CellRef> refs) {
+        if (refs == null || refs.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (CellRef ref : refs) {
+            if (ref == null) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(';');
+            }
+            sb.append(ref.toString());
+        }
+        return sb.toString();
+    }
+
+    /** Parses a semicolon-separated cell reference list; empty when null/blank. */
+    private static List<CellRef> parseRefs(String text) {
+        List<CellRef> out = new ArrayList<>();
+        if (text == null || text.isEmpty()) {
+            return out;
+        }
+        for (String part : text.split(";")) {
+            CellRef ref = parseRef(part);
+            if (ref != null) {
+                out.add(ref);
+            }
+        }
+        return out;
+    }
+
+    /** Parses one "S1(2,3)" reference (1-based sheet/row/col) or returns null. */
+    private static CellRef parseRef(String text) {
+        if (text == null) {
+            return null;
+        }
+        String s = text.trim();
+        int open = s.indexOf('(');
+        int comma = s.indexOf(',', open + 1);
+        int close = s.indexOf(')', comma + 1);
+        if (!s.startsWith("S") || open < 0 || comma < 0 || close < 0) {
+            return null;
+        }
+        try {
+            return new CellRef(
+                    Integer.parseInt(s.substring(1, open).trim()) - 1,
+                    Integer.parseInt(s.substring(open + 1, comma).trim()) - 1,
+                    Integer.parseInt(s.substring(comma + 1, close).trim()) - 1);
+        } catch (NumberFormatException e) {
             return null;
         }
     }

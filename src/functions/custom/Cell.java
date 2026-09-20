@@ -221,6 +221,58 @@ public class Cell {
         this.formatPattern = formatPattern;
     }
 
+    /**
+     * Restores this cell straight from saved workbook state, without evaluating
+     * its expression: the optimized tree, datatype, already-computed value and
+     * any saved error message are taken as given. Used when a workbook carries
+     * the saved expression trees, so loading does not recalculate.
+     */
+    public void restore(Node expression, DataType type, Object value, String errorMessage) {
+        this.expression = expression;
+        this.value = value;
+        this.type = type == null ? (value == null ? DataType.ANY : EvalUtil.valueType(value)) : type;
+        this.textValue = value == null ? "" : EvalUtil.asString(value);
+        this.errorMessage = errorMessage;
+        this.referenced = null;
+    }
+
+    /** Canonical string form of a cell value that {@link #decodeValue} reads back. */
+    public static String encodeValue(Object value) {
+        if (value == null) {
+            return "";
+        }
+        if (value instanceof Number n) {
+            return Double.toString(n.doubleValue());
+        }
+        if (value instanceof LocalDate || value instanceof LocalDateTime || value instanceof LocalTime) {
+            return value.toString();
+        }
+        return String.valueOf(value);
+    }
+
+    /** Reads back a value written by {@link #encodeValue} for the given datatype. */
+    public static Object decodeValue(DataType type, String encoded) {
+        if (encoded == null || encoded.isEmpty()) {
+            return null;
+        }
+        try {
+            if (type == null) {
+                return parse(encoded).getValue();
+            }
+            return switch (type) {
+                case NUMERIC -> Double.valueOf(encoded);
+                case BOOLEAN -> Boolean.valueOf(encoded);
+                case DATE -> LocalDate.parse(encoded);
+                case DATETIME -> LocalDateTime.parse(encoded);
+                case TIME -> LocalTime.parse(encoded);
+                case STRING -> encoded;
+                default -> parse(encoded).getValue();
+            };
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
     /** The reason the last evaluation failed, or null when it computed fine. */
     public String getErrorMessage() {
         return errorMessage;

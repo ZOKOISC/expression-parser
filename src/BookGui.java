@@ -787,13 +787,14 @@ public class BookGui {
             for (int i = 0; i < loaded.sheets.size(); i++) {
                 SheetView v = created.get(i);
                 for (WorkbookIO.LoadedCell lc : loaded.sheets.get(i).cells) {
-                    v.sheet.restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
-                            lc.type, lc.formatPattern, lc.alignment);
+                    v.sheet.restoreCell(lc);
                 }
             }
             for (SheetView v : sheets) {
                 v.sheet.setBindingsText(varsArea.getText());
-                v.sheet.recomputeAll();
+                if (!loaded.fullyStored) {
+                    v.sheet.recomputeAll();
+                }
                 v.grid.repaint();
             }
             if (!sheets.isEmpty()) {

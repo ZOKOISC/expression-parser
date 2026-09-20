@@ -872,6 +872,54 @@ public class Sheet implements CellProvider {
         saveCell(row, col, value, raw, node, type, refs, formatPattern, alignment);
     }
 
+    /**
+     * Restores one cell from a parsed workbook. When the file carries the saved
+     * optimized expression tree (together with its referenced set, ordered
+     * recalculation list, value and error) the cell is rebuilt directly from it
+     * and is NOT recalculated; otherwise the raw source is re-parsed as before.
+     */
+    public void restoreCell(WorkbookIO.LoadedCell lc) {
+        if (lc.expression != null) {
+            restoreStoredCell(lc);
+        } else {
+            restoreCell(lc.row, lc.col + 1, lc.text, lc.rawExpression,
+                    lc.type, lc.formatPattern, lc.alignment);
+        }
+    }
+
+    /**
+     * Rebuilds a formula cell from its saved internal state without evaluating
+     * the expression: the optimized tree, value, datatype, error, referenced set
+     * and the ordered list of cells to recalculate are restored exactly as saved.
+     */
+    private void restoreStoredCell(WorkbookIO.LoadedCell lc) {
+        int col = lc.col + 1;
+        String gridText = lc.text == null ? "" : lc.text;
+        setRawValue(lc.row, col, gridText);
+        Cell cell = new Cell(DataType.ANY, null);
+        cell.setRawExpression(lc.rawExpression == null ? gridText : lc.rawExpression);
+        cell.restore(lc.expression, lc.type, Cell.decodeValue(lc.type, lc.value), lc.error);
+        if (lc.referenced != null && !lc.referenced.isEmpty()) {
+            Set<CellRef> refs = new LinkedHashSet<>();
+            for (CellRef ref : lc.referenced) {
+                refs.add(ref.normalize(sheetIndex()));
+            }
+            cell.setReferenced(refs);
+        }
+        if (lc.dependents != null && !lc.dependents.isEmpty()) {
+            cell.setDependents(new ArrayList<>(lc.dependents));
+        }
+        if (lc.formatPattern != null && !lc.formatPattern.isEmpty()) {
+            cell.setFormatPattern(lc.formatPattern);
+        }
+        if (lc.alignment != null && !lc.alignment.isEmpty()) {
+            cell.setHorizontalAlignment(lc.alignment);
+        }
+        setFormatPattern(lc.row, col, lc.formatPattern);
+        setAlignment(lc.row, col, lc.alignment);
+        cellMap.put(cellKey(sheetIndex(), lc.row, col), cell);
+    }
+
     /** Recomputes every registered cell that carries an expression tree. */
     public void recomputeAll() {
         refreshNamedRefBindings();
