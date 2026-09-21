@@ -216,7 +216,7 @@ public class BookGui {
         itemOpen.addActionListener(e -> doOpenXml());
 
         // Double-clicking a sheet tab renames it; right-clicking it opens the
-        // sheet menu (Delete / Resize / Names / Save as / Import).
+        // sheet menu (Duplicate / Delete / Resize / Names / Save as / Import).
         tabs.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
@@ -1232,7 +1232,7 @@ public class BookGui {
         showTabMenu(e.getX(), e.getY());
     }
 
-    /** The right-click menu of a sheet tab: Delete / Resize / Names / Save as / Import. */
+    /** The right-click menu of a sheet tab: Duplicate / Delete / Resize / Names / Save as / Import. */
     private void showTabMenu(int x, int y) {
         buildTabMenu().show(tabs, x, y);
     }
@@ -1240,16 +1240,19 @@ public class BookGui {
     /** Builds the sheet tab menu. */
     private JPopupMenu buildTabMenu() {
         JPopupMenu menu = new JPopupMenu();
+        JMenuItem duplicate = new JMenuItem("Duplicate sheet");
         JMenuItem delete = new JMenuItem("Delete");
         JMenuItem resize = new JMenuItem("Resize...");
         JMenuItem names = new JMenuItem("Names ...");
         JMenuItem saveAs = new JMenuItem("Save as...");
         JMenuItem importItem = new JMenuItem("Import...");
+        duplicate.addActionListener(e -> doDuplicateSheet());
         delete.addActionListener(e -> doDeleteSheet());
         resize.addActionListener(e -> doCreateArray());
         names.addActionListener(e -> openNamedCellsPopup());
         saveAs.addActionListener(e -> doSaveSheetAs());
         importItem.addActionListener(e -> doImportSheet());
+        menu.add(duplicate);
         menu.add(delete);
         menu.add(resize);
         menu.add(names);
@@ -1257,6 +1260,39 @@ public class BookGui {
         menu.add(saveAs);
         menu.add(importItem);
         return menu;
+    }
+
+    /**
+     * Adds a new sheet holding a copy of the selected sheet: cell contents,
+     * formulas, values, formatting, alignment, names and named ranges (the copy
+     * also inherits the source's column widths). The copy gets the next free auto
+     * name so it can be referenced like any other sheet.
+     */
+    private void doDuplicateSheet() {
+        SheetView v = current();
+        if (v == null) {
+            setStatus("There is no sheet to duplicate.");
+            return;
+        }
+        Sheet src = v.sheet;
+        String name = nextSheetName();       // before the new slot exists
+        SheetView copy = createSheetView();
+        try {
+            copy.sheet.setName(name);
+            copy.model.setSheetSize(src.rows(), src.cols());
+            installRenderers(copy);
+            resizeRowNumberColumn(copy.grid, src.rows());
+            copy.sheet.setBindingsText(varsArea.getText());
+            copySheet(src, copy.sheet);
+            applyColumnWidths(copy.grid, dataColumnWidths(v.grid));
+        } catch (RuntimeException ex) {
+            showError(ex);
+            return;
+        }
+        tabs.addTab(copy.sheet.name(), scrollFor(copy));
+        tabs.setSelectedIndex(tabs.getTabCount() - 1);
+        updateGridSizeFields();
+        setStatus("Sheet duplicated: " + copy.sheet.name() + " (copy of " + src.name() + ").");
     }
 
     /**
@@ -1300,6 +1336,7 @@ public class BookGui {
             Sheet copy = single.add(new Sheet());
             copy.install(MathFunctions.createRegistry());
             copySheet(v.sheet, copy);
+            copy.setName(v.sheet.name());
             String xml = WorkbookIO.toXml(single, varsArea.getText(), null, null,
                     List.of(dataColumnWidths(v.grid)), version);
             Files.writeString(target, xml);
@@ -1361,12 +1398,21 @@ public class BookGui {
     /**
      * Copies the content of {@code src} - raw text, formulas (re-parsed so the
      * copy carries its expression tree), names, ranges, formats and alignment -
-     * into the freshly created {@code dst}. Used to write a sheet without book
-     * context.
+     * into the freshly created {@code dst}. The destination keeps its own name;
+     * callers that want the source's name set it themselves. Used to write a
+     * sheet without book context and to duplicate a sheet.
      */
     private static void copySheet(Sheet src, Sheet dst) {
-        dst.setName(src.name());
         dst.setSize(src.rows(), src.cols());
+        // Names first: a formula saved afterwards resolves its named references
+        // against the copy, so its dependencies are registered on the copy too.
+        for (Map.Entry<String, CellRef> e : src.namedRefs().entrySet()) {
+            dst.setCellName(e.getValue().getRow(), e.getValue().getCol() + 1, e.getKey());
+        }
+        for (Map.Entry<String, CellRect> e : src.namedRanges().entrySet()) {
+            CellRect rect = e.getValue().normalize(src.sheetIndex());
+            dst.setRangeName(rect.getRow0(), rect.getCol0() + 1, rect.getRow1(), rect.getCol1() + 1, e.getKey());
+        }
         for (int r = 0; r < src.rows(); r++) {
             for (int c = 1; c <= src.cols(); c++) {
                 Cell cell = src.cell(r, c);
@@ -1397,13 +1443,6 @@ public class BookGui {
                     }
                 }
             }
-        }
-        for (Map.Entry<String, CellRef> e : src.namedRefs().entrySet()) {
-            dst.setCellName(e.getValue().getRow(), e.getValue().getCol() + 1, e.getKey());
-        }
-        for (Map.Entry<String, CellRect> e : src.namedRanges().entrySet()) {
-            CellRect rect = e.getValue().normalize(src.sheetIndex());
-            dst.setRangeName(rect.getRow0(), rect.getCol0() + 1, rect.getRow1(), rect.getCol1() + 1, e.getKey());
         }
     }
 
