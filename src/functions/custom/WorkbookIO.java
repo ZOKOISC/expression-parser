@@ -5,8 +5,10 @@ import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -56,10 +58,11 @@ public final class WorkbookIO {
     }
 
     /**
-     * One restored cell: grid text, raw expression, type, format, alignment and
-     * - for formula cells written by the current version - the concise internal
-     * state (optimized tree, referenced set, ordered recalculation list, value
-     * and error) so the cell can be restored without recalculating.
+     * One restored cell: grid text, raw expression, type, format, alignment,
+     * presentation style and - for formula cells written by the current version -
+     * the concise internal state (optimized tree, referenced set, ordered
+     * recalculation list, value and error) so the cell can be restored without
+     * recalculating.
      */
     public static final class LoadedCell {
         public final int row;
@@ -69,6 +72,8 @@ public final class WorkbookIO {
         public final DataType type;
         public final String formatPattern;
         public final String alignment;
+        /** Presentation style text ({@link CellStyle#toText()}), or null. */
+        public final String style;
         /** Optimized expression tree, or null when the file has no stored tree. */
         public final Node expression;
         /** Cells this expression references (dependency set). */
@@ -81,7 +86,7 @@ public final class WorkbookIO {
         public final String error;
 
         public LoadedCell(int row, int col, String text, String rawExpression, DataType type,
-                   String formatPattern, String alignment, Node expression,
+                   String formatPattern, String alignment, String style, Node expression,
                    List<CellRef> referenced, List<CellRef> dependents, String value, String error) {
             this.row = row;
             this.col = col;
@@ -90,6 +95,7 @@ public final class WorkbookIO {
             this.type = type;
             this.formatPattern = formatPattern;
             this.alignment = alignment;
+            this.style = style;
             this.expression = expression;
             this.referenced = referenced;
             this.dependents = dependents;
@@ -302,20 +308,26 @@ public final class WorkbookIO {
                             }
                             calcCellsEl.appendChild(cellEl);
                         }
+                        CellStyle style = sheet.getStyle(r, c);
+                        boolean styled = style != null && !style.isEmpty();
                         if ((gridText != null && !gridText.trim().isEmpty())
                                 || (fmt != null && !fmt.isEmpty())
-                                || (alignment != null && !alignment.isEmpty())) {
-                            Element cellEl = doc.createElement("cell");
-                            cellEl.setAttribute("row", String.valueOf(r + 1));
-                            cellEl.setAttribute("col", String.valueOf(c));
-                            cellEl.setAttribute("text", gridText == null ? "" : gridText);
-                            if (fmt != null && !fmt.isEmpty()) {
-                                cellEl.setAttribute("format", fmt);
-                            }
-                            if (alignment != null && !alignment.isEmpty()) {
-                                cellEl.setAttribute("align", alignment);
-                            }
-                            presCellsEl.appendChild(cellEl);
+                                || (alignment != null && !alignment.isEmpty())
+                                || styled) {
+                        Element cellEl = doc.createElement("cell");
+                        cellEl.setAttribute("row", String.valueOf(r + 1));
+                        cellEl.setAttribute("col", String.valueOf(c));
+                        cellEl.setAttribute("text", gridText == null ? "" : gridText);
+                        if (fmt != null && !fmt.isEmpty()) {
+                            cellEl.setAttribute("format", fmt);
+                        }
+                        if (alignment != null && !alignment.isEmpty()) {
+                            cellEl.setAttribute("align", alignment);
+                        }
+                        if (styled) {
+                            cellEl.setAttribute("style", style.toText());
+                        }
+                        presCellsEl.appendChild(cellEl);
                         }
                     }
                 }
@@ -437,10 +449,13 @@ public final class WorkbookIO {
                     boolean hasExpression = cell != null && cell.getExpression() != null;
                     String fmt = sheet.getFormatPattern(r, c);
                     String alignment = sheet.getAlignment(r, c);
+                    CellStyle style = sheet.getStyle(r, c);
+                    boolean styled = style != null && !style.isEmpty();
                     boolean hasEval = (raw != null && !raw.trim().isEmpty()) || hasExpression;
                     boolean hasView = (gridText != null && !gridText.trim().isEmpty())
                             || (fmt != null && !fmt.isEmpty())
-                            || (alignment != null && !alignment.isEmpty());
+                            || (alignment != null && !alignment.isEmpty())
+                            || styled;
                     if (!hasEval && !hasView) {
                         continue;
                     }
@@ -453,6 +468,7 @@ public final class WorkbookIO {
                     List<CellRef> deps = cell == null || cell.getDependents() == null
                             ? null : new ArrayList<>(cell.getDependents());
                     ls.cells.add(new LoadedCell(r, c - 1, hasView ? gridText : raw, raw, type, fmt, alignment,
+                            styled ? style.toText() : null,
                             hasExpression ? cell.getExpression() : null, refs, deps, value, error));
                 }
             }
@@ -552,14 +568,18 @@ public final class WorkbookIO {
                         }
                     }
                     NodeList cellNodes = sheetEl.getElementsByTagName("cell");
+                    Set<String> visited = new LinkedHashSet<>();
                     for (int j = 0; j < cellNodes.getLength(); j++) {
                         Element cellEl = (Element) cellNodes.item(j);
                         int row = intAttr(cellEl, "row") - 1;
                         int col = intAttr(cellEl, "col") - 1;
+                        visited.add(row + "," + col);
                         Element presCell = presCells.get(row + "," + col);
                         String text = presCell != null ? strAttr(presCell, "text") : strAttr(cellEl, "text");
                         String format = presCell != null ? strAttr(presCell, "format") : strAttr(cellEl, "format");
                         String align = presCell != null ? strAttr(presCell, "align") : strAttr(cellEl, "align");
+                        String styleText = presCell != null ? strAttr(presCell, "style")
+                                : strAttr(cellEl, "style");
                         String raw = strAttr(cellEl, "raw");
                         if (text == null) {
                             text = raw;      // no presentation text: fall back to the source
@@ -592,11 +612,33 @@ public final class WorkbookIO {
                                 typeAttr(cellEl, "type"),
                                 format,
                                 align,
+                                styleText,
                                 expression,
                                 parseRefs(strAttr(cellEl, "refs")),
                                 parseRefs(strAttr(cellEl, "deps")),
                                 strAttr(cellEl, "value"),
                                 strAttr(cellEl, "error")));
+                    }
+                    // Cells that exist only in the presentation section - an empty
+                    // cell carrying a format, alignment or style - are restored from
+                    // there, so their presentation is not lost.
+                    for (Map.Entry<String, Element> e : presCells.entrySet()) {
+                        if (visited.contains(e.getKey())) {
+                            continue;
+                        }
+                        String[] rc = e.getKey().split(",");
+                        Element presCell = e.getValue();
+                        String text = strAttr(presCell, "text");
+                        ls.cells.add(new LoadedCell(
+                                Integer.parseInt(rc[0]),
+                                Integer.parseInt(rc[1]),
+                                text,
+                                null,
+                                Cell.parse(text).getType(),
+                                strAttr(presCell, "format"),
+                                strAttr(presCell, "align"),
+                                strAttr(presCell, "style"),
+                                null, null, null, null, null));
                     }
                     wb.sheets.add(ls);
                 }

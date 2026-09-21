@@ -1,12 +1,14 @@
 package functions.custom;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Frame;
 import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.font.TextAttribute;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -22,11 +24,14 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import javax.swing.BorderFactory;
 import javax.swing.border.Border;
 import javax.swing.JButton;
+import javax.swing.JColorChooser;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -355,6 +360,9 @@ public class SheetGui {
     }
 
     /** Renders cell values applying the cell's format pattern and alignment. */
+    /** Background tint of cells that carry an expression (a formula). */
+    private static final Color FORMULA_TINT = Color.LIGHT_GRAY;
+
     private static class FormatCellRenderer extends DefaultTableCellRenderer {
         private final SheetView view;
 
@@ -366,8 +374,8 @@ public class SheetGui {
         public java.awt.Component getTableCellRendererComponent(JTable table, Object value,
                 boolean isSelected, boolean hasFocus, int row, int column) {
             super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
-            if (column > 0) {
-                Cell cell = view.sheet.cell(row, column);
+            Cell cell = column > 0 ? view.sheet.cell(row, column) : null;
+            if (cell != null) {
                 String pat = cell.getFormatPattern();
                 Object val = cell.getValue();
                 if (pat != null && !pat.isEmpty()) {
@@ -410,7 +418,50 @@ public class SheetGui {
             } else {
                 setHorizontalAlignment(SwingConstants.CENTER);
             }
+            // Presentation: the cell's own background/caption colours and caption
+            // font. A selected cell keeps the selection colours so the selection
+            // stays visible; a formula cell defaults to the tint.
+            CellStyle style = cell == null ? null : view.sheet.getStyle(row, column);
+            Color background = null;
+            if (style != null && style.background != null) {
+                background = CellStyle.toColor(style.background);
+            } else if (cell != null && cell.hasFormula()) {
+                background = FORMULA_TINT;
+            }
+            if (isSelected) {
+                setBackground(table.getSelectionBackground());
+                setForeground(table.getSelectionForeground());
+            } else {
+                setBackground(background != null ? background : table.getBackground());
+                setForeground(style != null && style.foreground != null
+                        ? CellStyle.toColor(style.foreground) : table.getForeground());
+            }
+            setFont(style == null ? table.getFont() : captionFont(table, style));
             return this;
+        }
+
+        /** The table's font with the style's family/size/weight and decorations. */
+        private static Font captionFont(JTable table, CellStyle style) {
+            Font base = table.getFont();
+            int flags = (style.bold ? Font.BOLD : 0) | (style.italic ? Font.ITALIC : 0);
+            Font font = base;
+            if (style.fontFamily != null || style.fontSize != null) {
+                font = new Font(style.fontFamily != null ? style.fontFamily : base.getFamily(), flags,
+                        style.fontSize != null ? style.fontSize : base.getSize());
+            } else if (flags != 0) {
+                font = base.deriveFont(flags);
+            }
+            if (style.underline || style.strike) {
+                Map<TextAttribute, Object> attributes = new HashMap<>();
+                if (style.underline) {
+                    attributes.put(TextAttribute.UNDERLINE, TextAttribute.UNDERLINE_ON);
+                }
+                if (style.strike) {
+                    attributes.put(TextAttribute.STRIKETHROUGH, TextAttribute.STRIKETHROUGH_ON);
+                }
+                font = font.deriveFont(attributes);
+            }
+            return font;
         }
 
         /**
@@ -567,10 +618,148 @@ public class SheetGui {
         setStatus("New empty sheet created: " + rows + "x" + cols + ".");
     }
 
+    /**
+     * The "Format" submenu of the cell menu: presentation of the selected cells -
+     * background colour, caption colour and caption font.
+     */
+    private JMenu buildFormatMenu(SheetView v) {
+        JMenu formatMenu = new JMenu("Format");
+        JMenuItem background = new JMenuItem("Cell background color...");
+        background.addActionListener(ev -> chooseCellBackground());
+        JMenuItem caption = new JMenuItem("Caption color...");
+        caption.addActionListener(ev -> chooseCaptionColor());
+        JMenuItem font = new JMenuItem("Caption font...");
+        font.addActionListener(ev -> chooseCaptionFont());
+        JMenuItem clear = new JMenuItem("Clear formatting");
+        clear.addActionListener(ev -> applyToSelection(style -> {
+            style.background = null;
+            style.foreground = null;
+            style.fontFamily = null;
+            style.fontSize = null;
+            style.bold = false;
+            style.italic = false;
+            style.underline = false;
+            style.strike = false;
+        }));
+        formatMenu.add(background);
+        formatMenu.add(caption);
+        formatMenu.add(font);
+        formatMenu.addSeparator();
+        formatMenu.add(clear);
+        return formatMenu;
+    }
+
+    /**
+     * Applies a change to the presentation style of every cell of the grid's
+     * current selection (the dragged rectangle, or the active cell).
+     */
+    private void applyToSelection(java.util.function.Consumer<CellStyle> change) {
+        int[] range = currentRangeSelection();
+        if (range == null) {
+            setStatus("Select one or more cells first.");
+            return;
+        }
+        int cells = 0;
+        for (int r = range[0]; r <= range[1]; r++) {
+            for (int c = range[2]; c <= range[3]; c++) {
+                CellStyle current = view.sheet.getStyle(r, c);
+                CellStyle next = current == null ? new CellStyle() : current.copy();
+                change.accept(next);
+                view.sheet.setStyle(r, c, next);
+                cells++;
+            }
+        }
+        updateRowHeight();
+        view.grid.repaint();
+        setStatus("Formatted " + cells + " cell(s).");
+    }
+
+    /** The style of the top-left cell of the selection, or null when none. */
+    private CellStyle selectionStyle() {
+        int[] range = currentRangeSelection();
+        return range == null ? null : view.sheet.getStyle(range[0], range[2]);
+    }
+
+    /** Picks the background colour of the selected cells. */
+    private void chooseCellBackground() {
+        if (currentRangeSelection() == null) {
+            setStatus("Select one or more cells first.");
+            return;
+        }
+        CellStyle first = selectionStyle();
+        Color start = first == null ? null : CellStyle.toColor(first.background);
+        Color chosen = JColorChooser.showDialog(view.grid, "Cell background color",
+                start != null ? start : Color.WHITE);
+        if (chosen != null) {
+            applyToSelection(style -> style.background = CellStyle.toHex(chosen));
+        }
+    }
+
+    /** Picks the caption (text) colour of the selected cells. */
+    private void chooseCaptionColor() {
+        if (currentRangeSelection() == null) {
+            setStatus("Select one or more cells first.");
+            return;
+        }
+        CellStyle first = selectionStyle();
+        Color start = first == null ? null : CellStyle.toColor(first.foreground);
+        Color chosen = JColorChooser.showDialog(view.grid, "Caption color",
+                start != null ? start : Color.BLACK);
+        if (chosen != null) {
+            applyToSelection(style -> style.foreground = CellStyle.toHex(chosen));
+        }
+    }
+
+    /** Edits the caption font (family, size, weight, decorations) of the selection. */
+    private void chooseCaptionFont() {
+        if (currentRangeSelection() == null) {
+            setStatus("Select one or more cells first.");
+            return;
+        }
+        CellStyle first = selectionStyle();
+        int size = first != null && first.fontSize != null ? first.fontSize
+                : view.grid.getFont().getSize();
+        FontDialog dlg = new FontDialog(frame, first == null ? null : first.fontFamily, size,
+                first != null && first.bold, first != null && first.italic,
+                first != null && first.underline, first != null && first.strike);
+        dlg.setLocationRelativeTo(frame);
+        dlg.setVisible(true);
+        CellStyle chosen = dlg.getStyle();
+        if (chosen == null) {
+            return;
+        }
+        applyToSelection(style -> {
+            style.fontFamily = chosen.fontFamily;
+            style.fontSize = chosen.fontSize;
+            style.bold = chosen.bold;
+            style.italic = chosen.italic;
+            style.underline = chosen.underline;
+            style.strike = chosen.strike;
+        });
+    }
+
+    /**
+     * Keeps the grid's row height in step with the largest styled caption font, so
+     * a bigger caption is not clipped.
+     */
+    private void updateRowHeight() {
+        int base = view.grid.getFontMetrics(view.grid.getFont()).getHeight() + 4;
+        int max = view.sheet.maxStyleFontSize();
+        int height = max <= 0 ? base : Math.max(base, max + 6);
+        if (view.grid.getRowHeight() != height) {
+            view.grid.setRowHeight(height);
+        }
+    }
+
     private void showCellMenu(SheetView v, MouseEvent e) {
         int row = v.grid.rowAtPoint(e.getPoint());
         int col = v.grid.columnAtPoint(e.getPoint());
         if (row < 0 || col <= 0) return;
+        buildCellMenu(v, row, col).show(v.grid, e.getX(), e.getY());
+    }
+
+    /** Builds the cell right-click menu of one cell: type, edit, names, format, ... */
+    private JPopupMenu buildCellMenu(SheetView v, int row, int col) {
         Cell cell = v.sheet.cell(row, col);
         JPopupMenu menu = new JPopupMenu();
         JMenu typeMenu = new JMenu("Convert type");
@@ -605,6 +794,7 @@ public class SheetGui {
             }
         });
         menu.add(setFormat);
+        menu.add(buildFormatMenu(v));
         JMenuItem clear = new JMenuItem("Clear cell");
         clear.addActionListener(ev -> {
             try {
@@ -617,7 +807,7 @@ public class SheetGui {
         JMenuItem recompute = new JMenuItem("Recompute dependents");
         recompute.addActionListener(ev -> recomputeDependentsOnEdit(v, row, col));
         menu.add(recompute);
-        menu.show(v.grid, e.getX(), e.getY());
+        return menu;
     }
 
     /**
@@ -906,6 +1096,7 @@ public class SheetGui {
         if (!loaded.fullyStored) {
             view.sheet.recomputeAll();
         }
+        updateRowHeight();           // a saved caption font may need more room
         view.grid.repaint();
         currentFile = sourceFile == null ? null : sourceFile.toAbsolutePath().normalize();
         updateTitle();

@@ -36,6 +36,8 @@ public class Sheet implements CellProvider {
     private SheetBook book;
     private final Map<String, String> formatPatterns = new LinkedHashMap<>();
     private final Map<String, String> alignments = new LinkedHashMap<>();
+    /** Per-cell presentation beyond format/alignment (colours + caption font). */
+    private final Map<String, CellStyle> cellStyles = new LinkedHashMap<>();
     private String name = "";
     /** Stable unique identifier of this sheet (persisted; used as the sheet identity). */
     private String uuid = java.util.UUID.randomUUID().toString();
@@ -217,6 +219,45 @@ public class Sheet implements CellProvider {
         } else {
             alignments.put(key, alignment);
         }
+    }
+
+    /** The presentation style of a cell (colours, caption font), or null. */
+    public CellStyle getStyle(int row, int col) {
+        return cellStyles.get(cellKey(sheetIndex(), row, col));
+    }
+
+    /** Sets one cell's presentation style; null or an empty style clears it. */
+    public void setStyle(int row, int col, CellStyle style) {
+        String key = cellKey(sheetIndex(), row, col);
+        if (style == null || style.isEmpty()) {
+            cellStyles.remove(key);
+        } else {
+            cellStyles.put(key, style);
+        }
+    }
+
+    /**
+     * Applies the same presentation style to every cell of a rectangle (rows
+     * 0-based, columns 1-based, inclusive). Each cell gets its own copy so later
+     * edits to one cell never change another.
+     */
+    public void setStyleRange(int row0, int col1, int row1, int col2, CellStyle style) {
+        for (int r = Math.max(0, row0); r <= Math.min(row1, rows() - 1); r++) {
+            for (int c = Math.max(1, col1); c <= Math.min(col2, cols()); c++) {
+                setStyle(r, c, style == null ? null : style.copy());
+            }
+        }
+    }
+
+    /** The largest caption font size any cell style asks for, or 0 when none does. */
+    public int maxStyleFontSize() {
+        int max = 0;
+        for (CellStyle s : cellStyles.values()) {
+            if (s.fontSize != null && s.fontSize > max) {
+                max = s.fontSize;
+            }
+        }
+        return max;
     }
 
     public Map<String, Object> bindings() {
@@ -709,6 +750,7 @@ public class Sheet implements CellProvider {
     private void pruneOutOfRange(int rows, int cols) {
         formatPatterns.keySet().removeIf(k -> !inside(k, rows, cols));
         alignments.keySet().removeIf(k -> !inside(k, rows, cols));
+        cellStyles.keySet().removeIf(k -> !inside(k, rows, cols));
         namedRefs.entrySet().removeIf(e -> {
             CellRef r = e.getValue();
             return r.getRow() >= rows || r.getCol() >= cols;
@@ -742,6 +784,7 @@ public class Sheet implements CellProvider {
         cellMap.keySet().removeIf(k -> k.startsWith(prefix));
         formatPatterns.keySet().removeIf(k -> k.startsWith(prefix));
         alignments.keySet().removeIf(k -> k.startsWith(prefix));
+        cellStyles.keySet().removeIf(k -> k.startsWith(prefix));
         namedRefs.clear();
         namedRanges.clear();
     }
@@ -1152,6 +1195,7 @@ public class Sheet implements CellProvider {
      * and is NOT recalculated; otherwise the raw source is re-parsed as before.
      */
     public void restoreCell(WorkbookIO.LoadedCell lc) {
+        setStyle(lc.row, lc.col + 1, CellStyle.fromText(lc.style));
         if (lc.expression != null) {
             restoreStoredCell(lc);
         } else {

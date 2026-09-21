@@ -175,6 +175,15 @@ public class Cell {
         return expression != null;
     }
 
+    /**
+     * True when this cell carries an expression the user wrote (a formula), as
+     * opposed to a plain value: a constant node is a value, not an expression.
+     * Used by the grids to tint formula cells.
+     */
+    public boolean hasFormula() {
+        return expression != null && !(expression instanceof ConstantNode);
+    }
+
     public String getTextValue() {
         return textValue == null ? "" : textValue;
     }

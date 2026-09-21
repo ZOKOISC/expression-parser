@@ -110,6 +110,12 @@ Right-click a data cell:
   target pattern; NUMERIC ↔ BOOLEAN values convert (0 ⇄ false); otherwise an error
   is shown.
 - **Edit cell content…** — opens the cell editor (see below).
+- **Format** — presentation of the selected cell(s): **Cell background color…**,
+  **Caption color…** and **Caption font…** (family, size, bold, italic,
+  underlined, strike-through), plus **Clear formatting**. A drag selection
+  formats every cell in the rectangle. Cell colours and fonts are saved in the
+  workbook's presentation section and survive a reload; a selected cell keeps the
+  selection colour while it is selected.
 - **Clear cell** — empties the cell and recalculates dependents.
 - **Recompute dependents** — force a recalculation of everything that reads this
   cell.

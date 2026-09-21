@@ -49,6 +49,8 @@ public final class WorkbookCodec {
     private static final int EXPR = 64;
     private static final int REFS = 128;
     private static final int DEPS = 256;
+    /** Presentation style text ({@link CellStyle#toText()}). */
+    private static final int STYLE = 512;
 
     /** Fixed data-type order so the index stays stable independent of the enum. */
     private static final DataType[] TYPES = {
@@ -155,6 +157,7 @@ public final class WorkbookCodec {
         if (lc.rawExpression != null) flags |= RAW;
         if (lc.formatPattern != null) flags |= FORMAT_PATTERN;
         if (lc.alignment != null) flags |= ALIGN;
+        if (lc.style != null && !lc.style.isEmpty()) flags |= STYLE;
         if (lc.value != null) flags |= VALUE;
         if (lc.error != null) flags |= ERROR;
         if (lc.expression != null) flags |= EXPR;
@@ -166,6 +169,7 @@ public final class WorkbookCodec {
         if ((flags & RAW) != 0) writeString(out, lc.rawExpression);
         if ((flags & FORMAT_PATTERN) != 0) writeString(out, lc.formatPattern);
         if ((flags & ALIGN) != 0) writeString(out, lc.alignment);
+        if ((flags & STYLE) != 0) writeString(out, lc.style);
         if ((flags & VALUE) != 0) writeString(out, lc.value);
         if ((flags & ERROR) != 0) writeString(out, lc.error);
         if ((flags & EXPR) != 0) writeBytes(out, NodeCodec.toBytes(lc.expression));
@@ -240,6 +244,7 @@ public final class WorkbookCodec {
         String raw = (flags & RAW) != 0 ? readString(in) : null;
         String formatPattern = (flags & FORMAT_PATTERN) != 0 ? readString(in) : null;
         String alignment = (flags & ALIGN) != 0 ? readString(in) : null;
+        String style = (flags & STYLE) != 0 ? readString(in) : null;
         String value = (flags & VALUE) != 0 ? readString(in) : null;
         String error = (flags & ERROR) != 0 ? readString(in) : null;
         Node expression = (flags & EXPR) != 0 ? NodeCodec.fromBytes(readBytes(in)) : null;
@@ -259,7 +264,7 @@ public final class WorkbookCodec {
                 dependents.add(readRef(in));
             }
         }
-        return new WorkbookIO.LoadedCell(row, col, text, raw, type, formatPattern, alignment,
+        return new WorkbookIO.LoadedCell(row, col, text, raw, type, formatPattern, alignment, style,
                 expression, referenced, dependents, value, error);
     }
 
