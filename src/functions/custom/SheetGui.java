@@ -103,7 +103,7 @@ public class SheetGui {
     public SheetGui(boolean exitOnClose) {
         buildUi();
         confirmOnClose(exitOnClose);
-        Path remembered = Library.rememberedLibraryFolder();
+        Path remembered = Shelf.rememberedShelfFolder();
         currentDir = remembered != null ? remembered.toFile() : null;
     }
 

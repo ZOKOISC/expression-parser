@@ -12,9 +12,8 @@ src/                          default package — application entry points
   Main.java                   headless test/demo suite; launches BookGui at the end
   BookGui.java                workbook editor (multi-sheet grid GUI)
   ParserGui.java              expression sandbox GUI (parse / optimise / evaluate)
-  Library.java                the library model: catalog of books + default folder
-  LibraryGui.java             library GUI (edit folder, catalog table, add/open books)
-  run.bat / sheet.bat / gui.bat / parser.bat / library.bat   Windows launchers
+  ShelfGui.java               shelf GUI (edit folder, catalog table, add/open books)
+  run.bat / sheet.bat / gui.bat / parser.bat / book.bat / shelf.bat   Windows launchers
 
 src/expr/                     expression engine (no GUI, no custom FunctionRegistry)
   ExpressionParser.java       tokenizer + recursive-descent parser -> AST
@@ -42,6 +41,7 @@ src/functions/custom/         spreadsheet domain and grid bindings
   CellProvider.java           interface over a cell grid (at/rows/cols)
   Sheet.java                  a single sheet: raw grid, registry/bindings, save/recompute
   SheetBook.java              the workbook: ordered sheet list, shared cell map
+  Shelf.java                  the shelf model: catalog of books + default folder
   ArrayTable.java             simple in-memory grid used by Main's tests / samples
   ArrayGetFunction.java       the built-in get(row,col) / get(sheet,row,col) function
   ArrayModel.java             Swing AbstractTableModel adapter over a Sheet
@@ -150,5 +150,5 @@ automatically via `-sourcepath`), then runs the class.
 
 - `run.bat` → `Main` (self-checking demo; passes = summary printed + GUI starts)
 - `sheet.bat`, `gui.bat` → `BookGui` (workbook editor)
-- `library.bat` → `LibraryGui` (book library)
+- `shelf.bat` → `ShelfGui` (book shelf)
 - `parser.bat` → `ParserGui` (expression sandbox)

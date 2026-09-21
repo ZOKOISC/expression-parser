@@ -10,7 +10,7 @@ Double-click a batch file in the project folder (PATH is refreshed automatically
 | Launcher | Program | Purpose |
 |---|---|---|
 | `sheet.bat` (or `gui.bat`) | **BookGui** | the spreadsheet: grid of sheets |
-| `library.bat` | **LibraryGui** | catalog of books + editable default folder |
+| `shelf.bat` | **ShelfGui** | catalog of books + editable default folder |
 | `parser.bat` | **ParserGui** | try out expressions or functions without a grid |
 | `run.bat` | **Main** | headless self-checking demo of the engine |
 

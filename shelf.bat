@@ -6,13 +6,13 @@ for /f "tokens=2*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Ses
 for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "PATH=%%b;%PATH%"
 
 echo Forditas...
-javac -d out -sourcepath src src/LibraryGui.java
+javac -d out -sourcepath src src/ShelfGui.java
 if errorlevel 1 (
     echo Hiba a forditas soran.
     pause
     exit /b 1
 )
 
-echo BookLibrary inditasa...
-java -cp out LibraryGui 2> debug_err.log
+echo BookShelf inditasa...
+java -cp out ShelfGui 2> debug_err.log
 pause

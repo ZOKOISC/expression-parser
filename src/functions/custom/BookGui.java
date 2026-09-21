@@ -63,7 +63,6 @@ import functions.custom.CellDialog;
 import functions.custom.Sheet;
 import functions.custom.SheetBook;
 import functions.custom.WorkbookIO;
-import functions.custom.Library;
 import functions.custom.NamedCellsDialog;
 
 public class BookGui {
@@ -108,7 +107,7 @@ public class BookGui {
     /**
      * Builds the editor. If {@code openFile} is given the workbook is loaded
      * from it at startup; {@code exitOnClose} is false when the window is
-     * embedded in the library so closing it does not exit the JVM.
+     * embedded in the shelf so closing it does not exit the JVM.
      */
     public BookGui(File openFile, boolean exitOnClose) {
         this(openFile, exitOnClose, "BookGui");
@@ -116,7 +115,7 @@ public class BookGui {
 
     /**
      * Same as the basic constructor but lets the caller choose the window
-     * title (used by the library so the editor is titled after the book).
+     * title (used by the shelf so the editor is titled after the book).
      */
     private String bookName = "BookGui";
 
@@ -127,7 +126,7 @@ public class BookGui {
         if (openFile != null && openFile.exists()) {
             loadWorkbook(openFile.toPath());
         } else {
-            Path remembered = Library.rememberedLibraryFolder();
+            Path remembered = Shelf.rememberedShelfFolder();
             currentDir = remembered != null ? remembered.toFile() : null;
         }
     }

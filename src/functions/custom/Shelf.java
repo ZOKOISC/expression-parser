@@ -22,14 +22,22 @@ import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
 /**
- * A library of books. The library's default folder and its catalog (the list of
+ * A shelf of books. The shelf's default folder and its catalog (the list of
  * books with unique ids) are stored in a single XML file named
- * {@code library.xml} <em>inside</em> the default folder. Each book is saved as
+ * {@code shelf.xml} <em>inside</em> the default folder. Each book is saved as
  * {@code &lt;name&gt;.xml} in that same folder.
+ *
+ * <p>Files written before the rename ({@code library.xml} and the
+ * {@code .sheet-library-default-folder} setting) are still read, so an existing
+ * shelf keeps working; the new names are used from the next save on.</p>
  */
-public class Library {
+public class Shelf {
 
-    public static final String CONFIG_FILE_NAME = "library.xml";
+    /** The catalog file name written from now on. */
+    public static final String CONFIG_FILE_NAME = "shelf.xml";
+
+    /** The catalog file name used before the library -> shelf rename. */
+    public static final String LEGACY_CONFIG_FILE_NAME = "library.xml";
 
     /** One catalog entry: a unique id and the book's display name. */
     public static final class Book {
@@ -101,7 +109,7 @@ public class Library {
             DocumentBuilder db = dbf.newDocumentBuilder();
             Document doc = db.newDocument();
 
-            Element root = doc.createElement("library");
+            Element root = doc.createElement("shelf");
             doc.appendChild(root);
 
             Element folder = doc.createElement("defaultFolder");
@@ -125,20 +133,20 @@ public class Library {
             t.transform(new DOMSource(doc), new StreamResult(sw));
             return sw.toString();
         } catch (Exception ex) {
-            throw new IllegalStateException("Cannot serialize library: " + ex.getMessage(), ex);
+            throw new IllegalStateException("Cannot serialize shelf: " + ex.getMessage(), ex);
         }
     }
 
-    public static Library fromXml(String xml) {
+    public static Shelf fromXml(String xml) {
         try {
             DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
             DocumentBuilder db = dbf.newDocumentBuilder();
             Document doc = db.parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
 
-            Library lib = new Library();
+            Shelf shelf = new Shelf();
             NodeList folders = doc.getElementsByTagName("defaultFolder");
             if (folders.getLength() > 0) {
-                lib.defaultFolder = folders.item(0).getTextContent() == null
+                shelf.defaultFolder = folders.item(0).getTextContent() == null
                         ? "" : folders.item(0).getTextContent();
             }
             NodeList bookList = doc.getElementsByTagName("book");
@@ -146,63 +154,79 @@ public class Library {
                 Element el = (Element) bookList.item(i);
                 long id = Long.parseLong(el.getAttribute("id"));
                 String name = el.getAttribute("name");
-                lib.books.add(new Book(id, name));
+                shelf.books.add(new Book(id, name));
             }
-            return lib;
+            return shelf;
         } catch (Exception ex) {
-            throw new IllegalStateException("Cannot parse library XML: " + ex.getMessage(), ex);
+            throw new IllegalStateException("Cannot parse shelf XML: " + ex.getMessage(), ex);
         }
     }
 
-    /** Loads the library (or an empty one) from {@code library.xml} in the given folder. */
-    public static Library load(Path folder) throws IOException {
+    /**
+     * Loads the shelf (or an empty one) from {@code shelf.xml} in the given
+     * folder, falling back to a {@code library.xml} written before the rename.
+     */
+    public static Shelf load(Path folder) throws IOException {
         Path config = folder.resolve(CONFIG_FILE_NAME);
         if (!Files.exists(config)) {
-            Library lib = new Library();
-            lib.defaultFolder = folder.toString();
-            return lib;
+            Path legacy = folder.resolve(LEGACY_CONFIG_FILE_NAME);
+            if (!Files.exists(legacy)) {
+                Shelf shelf = new Shelf();
+                shelf.defaultFolder = folder.toString();
+                return shelf;
+            }
+            config = legacy;
         }
-        Library lib = fromXml(Files.readString(config, StandardCharsets.UTF_8));
-        if (lib.defaultFolder.isEmpty()) {
-            lib.defaultFolder = folder.toString();
+        Shelf shelf = fromXml(Files.readString(config, StandardCharsets.UTF_8));
+        if (shelf.defaultFolder.isEmpty()) {
+            shelf.defaultFolder = folder.toString();
         }
-        return lib;
+        return shelf;
     }
 
-    /** {@link #load(Path)} that never throws; on failure returns an empty library. */
-    public static Library loadSafe(Path folder) {
+    /** {@link #load(Path)} that never throws; on failure returns an empty shelf. */
+    public static Shelf loadSafe(Path folder) {
         try {
             return load(folder);
         } catch (Exception ex) {
-            Library lib = new Library();
-            lib.defaultFolder = folder == null ? "" : folder.toString();
-            return lib;
+            Shelf shelf = new Shelf();
+            shelf.defaultFolder = folder == null ? "" : folder.toString();
+            return shelf;
         }
     }
 
-    /** Writes {@code library.xml} into the given folder (creating it if needed). */
+    /** Writes {@code shelf.xml} into the given folder (creating it if needed). */
     public void save(Path folder) throws IOException {
         Files.createDirectories(folder);
         setDefaultFolder(folder.toString());
         Files.writeString(folder.resolve(CONFIG_FILE_NAME), toXml(), StandardCharsets.UTF_8);
     }
 
-    /** Settings file (in the user's home) that remembers the last library folder. */
+    /** Settings file (in the user's home) that remembers the last shelf folder. */
     private static final Path SETTINGS_FILE = Path.of(
+            System.getProperty("user.home"), ".sheet-shelf-default-folder");
+    /** Settings file written before the rename, still read when the new one is absent. */
+    private static final Path LEGACY_SETTINGS_FILE = Path.of(
             System.getProperty("user.home"), ".sheet-library-default-folder");
-    /** The settings file that remembers the last-used library folder. */
+    /** The settings file that remembers the last-used shelf folder. */
     public static Path settingsFile() {
         return SETTINGS_FILE;
     }
 
     /**
-     * The library folder most recently used, or {@code null} when none is
+     * The shelf folder most recently used, or {@code null} when none is
      * remembered (or the remembered one is no longer a directory).
      */
-    public static Path rememberedLibraryFolder() {
+    public static Path rememberedShelfFolder() {
+        Path remembered = readFolder(SETTINGS_FILE);
+        return remembered != null ? remembered : readFolder(LEGACY_SETTINGS_FILE);
+    }
+
+    /** The folder stored in {@code settings}, or null when absent or stale. */
+    private static Path readFolder(Path settings) {
         try {
-            if (Files.exists(SETTINGS_FILE)) {
-                String text = Files.readString(SETTINGS_FILE).trim();
+            if (Files.exists(settings)) {
+                String text = Files.readString(settings).trim();
                 if (!text.isEmpty()) {
                     Path folder = Path.of(text);
                     if (Files.isDirectory(folder)) {
@@ -217,7 +241,7 @@ public class Library {
     }
 
     /** Persists the given folder as the default for the next run. */
-    public static void rememberLibraryFolder(Path folder) {
+    public static void rememberShelfFolder(Path folder) {
         try {
             if (folder != null) {
                 Files.createDirectories(SETTINGS_FILE.getParent());
@@ -228,9 +252,22 @@ public class Library {
         }
     }
 
-    /** Remembered folder if any, else the built-in default ({@code ./library}). */
+    /**
+     * Remembered folder if any, else the built-in default {@code ./shelf} - or
+     * {@code ./library}, the folder name used before the rename, when only that
+     * one exists.
+     */
     public static Path resolveDefaultFolder() {
-        Path remembered = rememberedLibraryFolder();
-        return remembered != null ? remembered : Path.of(System.getProperty("user.dir"), "library");
+        Path remembered = rememberedShelfFolder();
+        if (remembered != null) {
+            return remembered;
+        }
+        Path base = Path.of(System.getProperty("user.dir"));
+        Path shelf = base.resolve("shelf");
+        Path legacy = base.resolve("library");
+        if (!Files.exists(shelf) && Files.isDirectory(legacy)) {
+            return legacy;
+        }
+        return shelf;
     }
 }

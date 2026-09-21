@@ -21,7 +21,7 @@ import functions.custom.ArrayGetFunction;
 import functions.custom.ArrayTable;
 import functions.custom.Cell;
 import functions.custom.FactorialFunction;
-import functions.custom.Library;
+import functions.custom.Shelf;
 import functions.custom.Sheet;
 import functions.custom.SheetBook;
 import functions.custom.WorkbookIO;
@@ -375,26 +375,26 @@ WorkbookIO.LoadedWorkbook loadedWb = WorkbookIO.fromXml(wbXml);
                 + " align=" + restored.cell(2, 1).getHorizontalAlignment());
 
         System.out.println();
-        System.out.println("=== Library XML round-trip ===\n");
+        System.out.println("=== Shelf XML round-trip ===\n");
 
-        Library lib = new Library();
-        RuntimeException libFailure = new RuntimeException("Library round-trip failed.");
-        Library.Book one = lib.createBook("Accounts");
-        Library.Book two = lib.createBook("Budget");
+        Shelf shelf = new Shelf();
+        RuntimeException shelfFailure = new RuntimeException("Shelf round-trip failed.");
+        Shelf.Book one = shelf.createBook("Accounts");
+        Shelf.Book two = shelf.createBook("Budget");
         if (one.id == two.id) {
-            throw libFailure;
+            throw shelfFailure;
         }
-        String libXml = lib.toXml();
-        System.out.println(libXml);
-        Library reloadedLib = Library.fromXml(libXml);
-        if (reloadedLib.books().size() != 2) {
-            throw libFailure;
+        String shelfXml = shelf.toXml();
+        System.out.println(shelfXml);
+        Shelf reloadedShelf = Shelf.fromXml(shelfXml);
+        if (reloadedShelf.books().size() != 2) {
+            throw shelfFailure;
         }
-        if (!reloadedLib.getById(one.id).name.equals("Accounts") ||
-                !reloadedLib.getById(two.id).name.equals("Budget")) {
-            throw libFailure;
+        if (!reloadedShelf.getById(one.id).name.equals("Accounts") ||
+                !reloadedShelf.getById(two.id).name.equals("Budget")) {
+            throw shelfFailure;
         }
-        System.out.printf("%-3s %-40s%n", "OK ", "library catalog round-trip (ids " + one.id + ", " + two.id + ")");
+        System.out.printf("%-3s %-40s%n", "OK ", "shelf catalog round-trip (ids " + one.id + ", " + two.id + ")");
 
         System.out.println();
         System.out.println("=== Resize keeps in-bounds cells (Sheet) ===\n");
