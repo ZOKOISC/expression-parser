@@ -283,7 +283,7 @@ public class SheetApiSample {
         System.out.println("   Opening the GUI on '" + savedFile
                 + "' with C2 = " + guiC2.get(0).value()
                 + " already recalculated (formula uses the named ref 'Gross').");
-        System.out.println("   Right-click any cell or press 'Named cells' to open the named-cells window.");
+        System.out.println("   Right-click any cell or press 'Names ...' to open the named-cells window.");
         System.out.println("   Drag across cells to select a rectangle and add a range name (Block[1,2]).");
         System.out.println("   Edit the sheet in the window and use Save XML (Ctrl+S).");
         System.out.println("   Closing the window ends this sample.");

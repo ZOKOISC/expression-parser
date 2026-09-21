@@ -11,6 +11,8 @@ import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -100,9 +102,33 @@ public class SheetGui {
      */
     public SheetGui(boolean exitOnClose) {
         buildUi();
-        frame.setDefaultCloseOperation(exitOnClose ? JFrame.EXIT_ON_CLOSE : JFrame.DISPOSE_ON_CLOSE);
+        confirmOnClose(exitOnClose);
         Path remembered = Library.rememberedLibraryFolder();
         currentDir = remembered != null ? remembered.toFile() : null;
+    }
+
+    /**
+     * Asks for confirmation before the window closes. On "Yes" the JVM exits
+     * (standalone launch) or the window is disposed (embedded, e.g.
+     * {@code SheetGuiAPI.show()}); on "No" nothing happens.
+     */
+    private void confirmOnClose(boolean exitOnClose) {
+        frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        frame.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                int choice = JOptionPane.showConfirmDialog(frame, "Close the window?",
+                        "Confirm close", JOptionPane.YES_NO_OPTION);
+                if (choice != JOptionPane.YES_OPTION) {
+                    return;
+                }
+                if (exitOnClose) {
+                    System.exit(0);
+                } else {
+                    frame.dispose();
+                }
+            }
+        });
     }
 
     private void buildUi() {
@@ -132,7 +158,7 @@ public class SheetGui {
         arrayControls.add(sizeField);
         arrayControls.add(new JLabel("]"));
         JButton btnResize = new JButton("Resize");
-        JButton btnNames = new JButton("Named cells");
+        JButton btnNames = new JButton("Names ...");
         arrayControls.add(btnResize);
         arrayControls.add(btnNames);
         typeLabel.setFont(mono);
@@ -561,10 +587,10 @@ public class SheetGui {
             typeMenu.add(item);
         }
         menu.add(typeMenu);
-        JMenuItem editCell = new JMenuItem("Edit cell content...");
+        JMenuItem editCell = new JMenuItem("Edit ...");
         editCell.addActionListener(ev -> showEditDialog(v, row, col, cell));
         menu.add(editCell);
-        JMenuItem namedCells = new JMenuItem("Named cells…");
+        JMenuItem namedCells = new JMenuItem("Names ...");
         namedCells.addActionListener(ev -> openNamedCellsPopup(row, col));
         menu.add(namedCells);
         JMenuItem setFormat = new JMenuItem("Set format pattern…");

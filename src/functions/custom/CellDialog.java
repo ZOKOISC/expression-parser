@@ -24,6 +24,7 @@ import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPopupMenu;
 import javax.swing.JPanel;
@@ -96,6 +97,7 @@ public class CellDialog extends JDialog {
         addTextPopup(dataTypeField);
         addTextPopup(nodeTypeField);
         addTextPopup(exprArea);
+        addFormatPopup(formatField);
         valueField.setFont(mono);
 
 		initDialog();
@@ -393,6 +395,12 @@ public class CellDialog extends JDialog {
             return "Error: " + e.getMessage();
         }
     }
+    /**
+     * Sets the edited cell's position: {@code row} is the 0-based grid row and
+     * {@code col} is the 1-based grid column (the JTable data column, where the
+     * row-number column is 0), so the displayed position is {@code (row + 1,
+     * col)}.
+     */
     public void setPosition(int row, int col) {
         selfRow = row;
         selfCol = col;
@@ -412,8 +420,8 @@ public class CellDialog extends JDialog {
         if (selfRow < 0 || selfCol < 1) {
             return;
         }
-        String pos = "(" + (selfRow + 1) + "," + (selfCol + 1) + ")";
-        String title = "Cell: " + (selfRow + 1) + ", " + (selfCol + 1);
+        String pos = "(" + (selfRow + 1) + "," + selfCol + ")";
+        String title = "Cell: " + (selfRow + 1) + ", " + selfCol;
         if (cellName != null && !cellName.isEmpty()) {
             pos += "   '" + cellName + "'";
             title += " (" + cellName + ")";
@@ -443,5 +451,46 @@ public class CellDialog extends JDialog {
                 if (e.isPopupTrigger()) menu.show(comp, e.getX(), e.getY());
             }
         });
+    }
+
+    /**
+     * Right-click menu of the Format pattern field: a list of predefined named
+     * patterns (choosing one fills the field) followed by the usual text actions.
+     */
+    private void addFormatPopup(JTextField field) {
+        JPopupMenu menu = buildFormatMenu(field);
+        field.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger()) menu.show(field, e.getX(), e.getY());
+            }
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger()) menu.show(field, e.getX(), e.getY());
+            }
+        });
+    }
+
+    /** Builds the Format pattern field's right-click menu. */
+    private static JPopupMenu buildFormatMenu(JTextField field) {
+        JPopupMenu menu = new JPopupMenu();
+        menu.add(namedPattern("Currency (Ft)", "###,###,###,###.-Ft", field));
+        menu.add(namedPattern("Currency (\u20ac)", "###,###,###.00 \u20ac", field));
+        menu.addSeparator();
+        ActionMap am = field.getActionMap();
+        menu.add(am.get(DefaultEditorKit.cutAction));
+        menu.add(am.get(DefaultEditorKit.copyAction));
+        menu.add(am.get(DefaultEditorKit.pasteAction));
+        menu.addSeparator();
+        menu.add(am.get(DefaultEditorKit.selectAllAction));
+        return menu;
+    }
+
+    /** A menu item that fills the Format field with a predefined pattern. */
+    private static JMenuItem namedPattern(String name, String pattern, JTextField field) {
+        JMenuItem item = new JMenuItem(name);
+        item.setToolTipText(pattern);
+        item.addActionListener(e -> field.setText(pattern));
+        return item;
     }
 }

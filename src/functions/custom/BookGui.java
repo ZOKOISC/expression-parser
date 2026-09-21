@@ -12,6 +12,8 @@ import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -120,17 +122,37 @@ public class BookGui {
     public BookGui(File openFile, boolean exitOnClose, String windowTitle) {
         this.bookName = windowTitle == null ? "BookGui" : windowTitle;
         buildUi();
-        if (exitOnClose) {
-            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        } else {
-            frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        }
+        confirmOnClose(exitOnClose);
         if (openFile != null && openFile.exists()) {
             loadWorkbook(openFile.toPath());
         } else {
             Path remembered = Library.rememberedLibraryFolder();
             currentDir = remembered != null ? remembered.toFile() : null;
         }
+    }
+
+    /**
+     * Asks for confirmation before the window closes. On "Yes" the JVM exits
+     * (standalone launch) or the window is disposed (embedded, e.g.
+     * {@code BookGuiAPI.show()}); on "No" nothing happens.
+     */
+    private void confirmOnClose(boolean exitOnClose) {
+        frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        frame.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                int choice = JOptionPane.showConfirmDialog(frame, "Close the window?",
+                        "Confirm close", JOptionPane.YES_NO_OPTION);
+                if (choice != JOptionPane.YES_OPTION) {
+                    return;
+                }
+                if (exitOnClose) {
+                    System.exit(0);
+                } else {
+                    frame.dispose();
+                }
+            }
+        });
     }
 
     private void buildUi() {
@@ -626,13 +648,13 @@ public class BookGui {
             typeMenu.add(item);
         }
         menu.add(typeMenu);
-        JMenuItem editCell = new JMenuItem("Edit cell content...");
+        JMenuItem editCell = new JMenuItem("Edit ...");
         editCell.addActionListener(ev -> showEditDialog(v, row, col, cell));
         menu.add(editCell);
-        JMenuItem namedCells = new JMenuItem("Named cellsâ€¦");
+        JMenuItem namedCells = new JMenuItem("Names ...");
         namedCells.addActionListener(ev -> openNamedCellsPopup(v, row, col));
         menu.add(namedCells);
-        JMenuItem setFormat = new JMenuItem("Set format patternâ€¦");
+        JMenuItem setFormat = new JMenuItem("Set format pattern ...");
         setFormat.addActionListener(ev -> {
             String pat = JOptionPane.showInputDialog(v.grid,
                     "Enter Java format pattern (e.g. #,##0.00, yyyy-MM-dd, HH:mm):",
@@ -1185,7 +1207,7 @@ public class BookGui {
         JPopupMenu menu = new JPopupMenu();
         JMenuItem delete = new JMenuItem("Delete");
         JMenuItem resize = new JMenuItem("Resize...");
-        JMenuItem names = new JMenuItem("Names...");
+        JMenuItem names = new JMenuItem("Names ...");
         JMenuItem saveAs = new JMenuItem("Save as...");
         JMenuItem importItem = new JMenuItem("Import...");
         delete.addActionListener(e -> doDeleteSheet());
