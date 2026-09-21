@@ -22,8 +22,9 @@ import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
 /**
- * A shelf of books. The shelf's default folder and its catalog (the list of
- * books with unique ids) are stored in a single XML file named
+ * A shelf of books. The shelf's default folder and its catalog (the books, each
+ * with a unique id, a background uuid, a name and a title) are stored in a
+ * single XML file named
  * {@code shelf.xml} <em>inside</em> the default folder. Each book is saved as
  * {@code &lt;name&gt;.xml} in that same folder.
  *
@@ -39,24 +40,52 @@ public class Shelf {
     /** The catalog file name used before the library -> shelf rename. */
     public static final String LEGACY_CONFIG_FILE_NAME = "library.xml";
 
-    /** One catalog entry: a unique id and the book's display name. */
+    /**
+     * One catalog entry. The {@code id} is the catalog id, the {@code uuid} is the
+     * stable background identifier (assigned silently, kept across renames and
+     * never shown in the catalog), {@code name} is the book's name - also its file
+     * name - and {@code title} is the user-given title shown in the editor.
+     */
     public static final class Book {
         public final long id;
-        public final String name;
+        public final String uuid;
+        public String name;
+        public String title;
 
         public Book(long id, String name) {
+            this(id, name, "", null);
+        }
+
+        public Book(long id, String name, String title, String uuid) {
             this.id = id;
-            this.name = name;
+            this.name = name == null ? "" : name;
+            this.title = title == null ? "" : title;
+            this.uuid = uuid == null || uuid.isBlank()
+                    ? java.util.UUID.randomUUID().toString() : uuid;
         }
 
         public String fileName() {
             return name + ".xml";
         }
 
+        /** The title to show a user: the given title, or the name when unset. */
+        public String displayTitle() {
+            return title == null || title.isBlank() ? name : title;
+        }
+
         @Override
         public String toString() {
             return name;
         }
+    }
+
+    /**
+     * True when {@code name} can be used as a book name (and thus as its file
+     * name): non-blank and without path or Windows-reserved characters.
+     */
+    public static boolean isUsableBookName(String name) {
+        return name != null && !name.trim().isEmpty()
+                && !name.trim().matches(".*[\\\\/:*?\"<>|].*");
     }
 
     private final List<Book> books = new ArrayList<>();
@@ -94,9 +123,38 @@ public class Shelf {
     }
 
     public Book createBook(String name) {
-        Book b = new Book(nextId(), name);
+        return createBook(name, "");
+    }
+
+    /** Adds a book with the given name (file name) and optional title. */
+    public Book createBook(String name, String title) {
+        Book b = new Book(nextId(), name, title, null);
         books.add(b);
         return b;
+    }
+
+    /**
+     * Renames a book (and thus its file name). The new name must be usable and
+     * not already taken by another catalog entry.
+     */
+    public void renameBook(Book book, String name) {
+        String value = name == null ? "" : name.trim();
+        if (!isUsableBookName(value)) {
+            throw new IllegalArgumentException("'" + (name == null ? "" : name.trim())
+                    + "' is not a usable book name (no path or \\ / : * ? \" < > | characters).");
+        }
+        for (Book b : books) {
+            if (b != book && b.name.equalsIgnoreCase(value)) {
+                throw new IllegalArgumentException(
+                        "A book named '" + value + "' already exists in the catalog.");
+            }
+        }
+        book.name = value;
+    }
+
+    /** Gives the book a title (blank clears it; the name is then shown instead). */
+    public void setTitle(Book book, String title) {
+        book.title = title == null ? "" : title.trim();
     }
 
     public void removeBook(Book book) {
@@ -122,6 +180,10 @@ public class Shelf {
                 Element bookEl = doc.createElement("book");
                 bookEl.setAttribute("id", String.valueOf(b.id));
                 bookEl.setAttribute("name", b.name);
+                bookEl.setAttribute("uuid", b.uuid);
+                if (b.title != null && !b.title.isEmpty()) {
+                    bookEl.setAttribute("title", b.title);
+                }
                 catalog.appendChild(bookEl);
             }
 
@@ -154,7 +216,11 @@ public class Shelf {
                 Element el = (Element) bookList.item(i);
                 long id = Long.parseLong(el.getAttribute("id"));
                 String name = el.getAttribute("name");
-                shelf.books.add(new Book(id, name));
+                // A title and a uuid may be absent in older catalogs: the title
+                // falls back to the name and a fresh uuid is generated.
+                String title = el.hasAttribute("title") ? el.getAttribute("title") : "";
+                String uuid = el.hasAttribute("uuid") ? el.getAttribute("uuid") : null;
+                shelf.books.add(new Book(id, name, title, uuid));
             }
             return shelf;
         } catch (Exception ex) {

@@ -42,11 +42,12 @@ import functions.custom.BookGui;
 
 /**
  * Shelf manager GUI. Shows the shelf's default folder (editable) and its
- * catalog of books (unique id + name), lets the user pick the folder, create a
- * new book (saved as &lt;name&gt;.xml in the folder), import an existing
- * workbook into the shelf, delete a book, and open the selected book for
- * editing in a {@link BookGui} window. The File menu offers New Book, Import
- * Book and Delete Book.
+ * catalog of books (id, name, title, file), lets the user pick the folder,
+ * create a new book (saved as &lt;name&gt;.xml in the folder), import an
+ * existing workbook into the shelf, delete a book, rename a book (the file name
+ * follows), give a book a title, and open the selected book for editing in a
+ * {@link BookGui} window. The File menu offers New Book, Import Book, Delete
+ * Book, Rename Book... and Book Title....
  */
 public class ShelfGui {
 
@@ -80,9 +81,10 @@ public class ShelfGui {
         JPanel catalogPanel = new JPanel(new BorderLayout());
         catalogPanel.setBorder(BorderFactory.createTitledBorder("Catalog of books"));
         table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        table.getColumnModel().getColumn(0).setPreferredWidth(60);
-        table.getColumnModel().getColumn(1).setPreferredWidth(260);
+        table.getColumnModel().getColumn(0).setPreferredWidth(50);
+        table.getColumnModel().getColumn(1).setPreferredWidth(180);
         table.getColumnModel().getColumn(2).setPreferredWidth(200);
+        table.getColumnModel().getColumn(3).setPreferredWidth(160);
         catalogPanel.add(new JScrollPane(table), BorderLayout.CENTER);
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
@@ -132,19 +134,26 @@ public class ShelfGui {
         setStatus("Shelf loaded. Pick a folder or create a book.");
     }
 
-    /** The File menu: New Book / Import Book / Delete Book. */
+    /** The File menu: New Book / Import Book / Delete Book, then Rename / Title. */
     private JMenuBar buildMenuBar() {
         JMenuBar bar = new JMenuBar();
         JMenu file = new JMenu("File");
         JMenuItem newBookItem = new JMenuItem("New Book");
         JMenuItem importBookItem = new JMenuItem("Import Book");
         JMenuItem deleteBookItem = new JMenuItem("Delete Book");
+        JMenuItem renameBookItem = new JMenuItem("Rename Book...");
+        JMenuItem titleBookItem = new JMenuItem("Book Title...");
         newBookItem.addActionListener(e -> createBook(frame));
         importBookItem.addActionListener(e -> importBook(frame));
         deleteBookItem.addActionListener(e -> deleteBook(frame));
+        renameBookItem.addActionListener(e -> renameBook(frame));
+        titleBookItem.addActionListener(e -> editBookTitle(frame));
         file.add(newBookItem);
         file.add(importBookItem);
         file.add(deleteBookItem);
+        file.addSeparator();
+        file.add(renameBookItem);
+        file.add(titleBookItem);
         bar.add(file);
         return bar;
     }
@@ -191,6 +200,10 @@ public class ShelfGui {
         if (!isWorkbookXml(xml)) {
             throw new IllegalArgumentException(source.getFileName() + " is not a workbook XML file.");
         }
+        if (!Shelf.isUsableBookName(name)) {
+            throw new IllegalArgumentException("'" + name + "' is not a usable book name"
+                    + " (no path or \\ / : * ? \" < > | characters).");
+        }
         if (containsName(name)) {
             throw new IllegalArgumentException("A book named '" + name + "' already exists in the catalog.");
         }
@@ -210,12 +223,11 @@ public class ShelfGui {
      * and its workbook file is deleted from the shelf folder.
      */
     private void deleteBook(JFrame frame) {
-        int row = table.getSelectedRow();
-        if (row < 0) {
+        Shelf.Book book = selectedBook();
+        if (book == null) {
             setStatus("Select a book from the catalog first.");
             return;
         }
-        Shelf.Book book = shelf.books().get(row);
         Path file = Path.of(shelf.defaultFolder()).resolve(book.fileName());
         int choice = JOptionPane.showConfirmDialog(frame,
                 "Delete book '" + book.name + "'?\n\n" + file + "\n\nThe file is deleted too.",
@@ -232,6 +244,69 @@ public class ShelfGui {
         } catch (Exception ex) {
             showError(ex);
         }
+    }
+
+    /**
+     * Renames the selected book: the catalog entry and its workbook file are
+     * renamed together, because the file name follows the book name.
+     */
+    private void renameBook(JFrame frame) {
+        Shelf.Book book = selectedBook();
+        if (book == null) {
+            setStatus("Select a book from the catalog first.");
+            return;
+        }
+        String entered = JOptionPane.showInputDialog(frame, "Book name (its file name):", book.name);
+        if (entered == null || entered.trim().isEmpty()) {
+            return;
+        }
+        String name = entered.trim();
+        try {
+            Path oldFile = Path.of(shelf.defaultFolder()).resolve(book.fileName());
+            Path newFile = Path.of(shelf.defaultFolder()).resolve(name + ".xml");
+            if (!oldFile.equals(newFile) && Files.exists(newFile)) {
+                throw new IllegalArgumentException(
+                        "A file named " + newFile.getFileName() + " already exists in the folder.");
+            }
+            shelf.renameBook(book, name);       // rejects unusable or duplicate names
+            if (!oldFile.equals(newFile) && Files.exists(oldFile)) {
+                Files.move(oldFile, newFile);
+            }
+            saveShelf();
+            refreshTable();
+            selectBook(book);
+            setStatus("Renamed to '" + book.name + "' (" + book.fileName() + ").");
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    /** Gives the selected book a title; it is shown by the editor and the catalog. */
+    private void editBookTitle(JFrame frame) {
+        Shelf.Book book = selectedBook();
+        if (book == null) {
+            setStatus("Select a book from the catalog first.");
+            return;
+        }
+        String entered = JOptionPane.showInputDialog(frame, "Book title:", book.displayTitle());
+        if (entered == null) {
+            return;
+        }
+        try {
+            shelf.setTitle(book, entered);
+            saveShelf();
+            refreshTable();
+            selectBook(book);
+            setStatus("Title of '" + book.name + "': " + book.displayTitle());
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    /** The book of the selected catalog row, or null when nothing is selected. */
+    private Shelf.Book selectedBook() {
+        int row = table.getSelectedRow();
+        return row < 0 ? null : shelf.books().get(row);
     }
 
     /** True when the text parses and its root element is a {@code <workbook>}. */
@@ -326,6 +401,11 @@ public class ShelfGui {
         }
         name = name.trim();
         try {
+            if (!Shelf.isUsableBookName(name)) {
+                showError(new IllegalArgumentException("'" + name + "' is not a usable book name"
+                        + " (no path or \\ / : * ? \" < > | characters)."));
+                return;
+            }
             if (containsName(name)) {
                 showError(new IllegalArgumentException("A book named '" + name + "' already exists in the catalog."));
                 return;
@@ -361,19 +441,18 @@ Path file = Path.of(shelf.defaultFolder()).resolve(book.fileName());
     }
 
     private void openSelected() {
-        int row = table.getSelectedRow();
-        if (row < 0) {
+        Shelf.Book book = selectedBook();
+        if (book == null) {
             setStatus("Select a book from the catalog first.");
             return;
         }
-        Shelf.Book book = shelf.books().get(row);
         Path file = Path.of(shelf.defaultFolder()).resolve(book.fileName());
         if (!Files.exists(file)) {
             showError(new java.io.IOException("Missing book file: " + file));
             return;
         }
-        SwingUtilities.invokeLater(() -> new BookGui(file.toFile(), false, book.name));
-        setStatus("Opened '" + book.name + "' for editing.");
+        SwingUtilities.invokeLater(() -> new BookGui(file.toFile(), false, book.displayTitle()));
+        setStatus("Opened '" + book.displayTitle() + "' for editing.");
     }
 
     private void removeSelected() {
@@ -417,7 +496,7 @@ Path file = Path.of(shelf.defaultFolder()).resolve(book.fileName());
 
     private static class CatalogModel extends AbstractTableModel {
         private List<Shelf.Book> books = List.of();
-        private final String[] columns = { "ID", "Name", "File" };
+        private final String[] columns = { "ID", "Name", "Title", "File" };
 
         void setBooks(List<Shelf.Book> books) {
             this.books = books;
@@ -445,6 +524,7 @@ Path file = Path.of(shelf.defaultFolder()).resolve(book.fileName());
             return switch (columnIndex) {
                 case 0 -> b.id;
                 case 1 -> b.name;
+                case 2 -> b.displayTitle();
                 default -> b.fileName();
             };
         }
