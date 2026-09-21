@@ -105,7 +105,9 @@ public class Cell {
         this.type = parsed.getType();
         this.value = parsed.getValue();
         this.textValue = rawText;
-        this.rawExpression = rawText;
+        // A literal holds a value, not an expression source: never keep the value
+        // text as the raw expression (a constant node has no source text).
+        this.rawExpression = null;
         this.expression = constantFor(value);
         this.referenced = null;
         this.errorMessage = null;
@@ -384,39 +386,27 @@ public class Cell {
         if (t.length() >= 2) {
             char q = t.charAt(0);
             if ((q == '\'' || q == '"') && t.charAt(t.length() - 1) == q) {
-                Cell c = new Cell(DataType.STRING, t.substring(1, t.length() - 1));
-                c.setRawExpression(s);
-                return c;
+                return new Cell(DataType.STRING, t.substring(1, t.length() - 1));
             }
         }
         if (t.equalsIgnoreCase("true")) {
-            Cell c = new Cell(DataType.BOOLEAN, Boolean.TRUE);
-            c.setRawExpression(s);
-            return c;
+            return new Cell(DataType.BOOLEAN, Boolean.TRUE);
         }
         if (t.equalsIgnoreCase("false")) {
-            Cell c = new Cell(DataType.BOOLEAN, Boolean.FALSE);
-            c.setRawExpression(s);
-            return c;
+            return new Cell(DataType.BOOLEAN, Boolean.FALSE);
         }
         try {
-            Cell c = new Cell(DataType.DATETIME, LocalDateTime.parse(t, DATETIME_FMT));
-            c.setRawExpression(s);
-            return c;
+            return new Cell(DataType.DATETIME, LocalDateTime.parse(t, DATETIME_FMT));
         } catch (DateTimeParseException ignored) {
             // not a datetime literal
         }
         try {
-            Cell c = new Cell(DataType.DATE, LocalDate.parse(t, DATE_FMT));
-            c.setRawExpression(s);
-            return c;
+            return new Cell(DataType.DATE, LocalDate.parse(t, DATE_FMT));
         } catch (DateTimeParseException ignored) {
             // not a date literal
         }
         try {
-            Cell c = new Cell(DataType.TIME, LocalTime.parse(t, TIME_FMT));
-            c.setRawExpression(s);
-            return c;
+            return new Cell(DataType.TIME, LocalTime.parse(t, TIME_FMT));
         } catch (DateTimeParseException ignored) {
             // not a time literal
         }
@@ -428,25 +418,35 @@ public class Cell {
                     percent.group(3) == null ? 0 : percent.group(3).length(), s);
         }
         if (t.equals("0")) {
-            Cell c = new Cell(DataType.NUMERIC, 0.0);
-            c.setRawExpression(s);
-            return c;
+            return new Cell(DataType.NUMERIC, 0.0);
         }
         if (t.length() >= 2 && t.charAt(0) == '0' && isAllDigits(t.substring(1))) {
-            Cell c = new Cell(DataType.STRING, t);
-            c.setRawExpression(s);
-            return c;
+            return new Cell(DataType.STRING, t);
         }
         try {
-            Cell c = new Cell(DataType.NUMERIC, Double.parseDouble(t));
-            c.setRawExpression(s);
-            return c;
+            return new Cell(DataType.NUMERIC, Double.parseDouble(t));
         } catch (NumberFormatException ignored) {
             // not a numeric literal
         }
-        Cell c = new Cell(DataType.STRING, t);
-        c.setRawExpression(s);
-        return c;
+        return new Cell(DataType.STRING, t);
+    }
+
+    /**
+     * True when {@code text} is only the given value written out - a plain
+     * literal such as {@code "5"}, {@code "true"} or {@code "abc"} - rather than
+     * a real expression such as {@code "2+3"}. A constant node must never carry
+     * its own value as its raw expression, so callers that would otherwise store
+     * the value text clear it when this returns true.
+     */
+    public static boolean isValueText(String text, Object value) {
+        if (text == null || text.trim().isEmpty() || value == null) {
+            return false;
+        }
+        Object parsed = parse(text).getValue();
+        if (parsed instanceof Number a && value instanceof Number b) {
+            return a.doubleValue() == b.doubleValue();
+        }
+        return value.equals(parsed);
     }
 
     private static boolean isAllDigits(String s) {

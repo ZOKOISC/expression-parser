@@ -261,7 +261,10 @@ public final class WorkbookIO {
                         String gridText = sheet.getRawValue(r, c);
                         Cell cell = sheet.registeredCell(r, c);
                         String rawExpr = cell == null ? null : cell.getRawExpression();
-                        String raw = rawExpr == null ? gridText : rawExpr;
+                        // A literal cell has no source text of its own: the grid
+                        // text stands in for it, so the cell is written (and thus
+                        // restored) instead of being lost with the presentation.
+                        String raw = rawExpr == null || rawExpr.isEmpty() ? gridText : rawExpr;
                         boolean hasExpression = cell != null && cell.getExpression() != null;
                         String fmt = sheet.getFormatPattern(r, c);
                         String alignment = sheet.getAlignment(r, c);
@@ -430,7 +433,7 @@ public final class WorkbookIO {
                     String gridText = sheet.getRawValue(r, c);
                     Cell cell = sheet.registeredCell(r, c);
                     String rawExpr = cell == null ? null : cell.getRawExpression();
-                    String raw = rawExpr == null ? gridText : rawExpr;
+                    String raw = rawExpr == null || rawExpr.isEmpty() ? gridText : rawExpr;
                     boolean hasExpression = cell != null && cell.getExpression() != null;
                     String fmt = sheet.getFormatPattern(r, c);
                     String alignment = sheet.getAlignment(r, c);

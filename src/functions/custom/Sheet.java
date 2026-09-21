@@ -880,7 +880,15 @@ public class Sheet implements CellProvider {
         String cellText = text == null ? "" : text;
         setRawValue(row, col, cellText);
         Cell saved = Cell.parse(cellText);
-        saved.setRawExpression(rawExpression);
+        // A constant node holds a value, not an expression source: never copy the
+        // value text into the raw expression (that would make the value look like
+        // a formula source, and it would be re-parsed on load).
+        boolean constant = node == null || node instanceof ConstantNode;
+        String rawText = rawExpression == null ? "" : rawExpression;
+        if (constant && Cell.isValueText(rawText, saved.getValue())) {
+            rawText = "";
+        }
+        saved.setRawExpression(rawText);
         saved.setType(type);
         saved.setExpression(node);
         // A percent literal entry (grid or dialog Value field) defaults to the
@@ -1162,8 +1170,16 @@ public class Sheet implements CellProvider {
         String gridText = lc.text == null ? "" : lc.text;
         setRawValue(lc.row, col, gridText);
         Cell cell = new Cell(DataType.ANY, null);
-        cell.setRawExpression(lc.rawExpression == null ? gridText : lc.rawExpression);
-        cell.restore(lc.expression, lc.type, Cell.decodeValue(lc.type, lc.value), lc.error);
+        Object value = Cell.decodeValue(lc.type, lc.value);
+        String raw = lc.rawExpression == null ? "" : lc.rawExpression;
+        // A constant node keeps no source text: never restore the value text as
+        // its raw expression (older files stored it there).
+        if ((lc.expression == null || lc.expression instanceof ConstantNode)
+                && Cell.isValueText(raw, value)) {
+            raw = "";
+        }
+        cell.setRawExpression(raw);
+        cell.restore(lc.expression, lc.type, value, lc.error);
         if (lc.referenced != null && !lc.referenced.isEmpty()) {
             Set<CellRef> refs = new LinkedHashSet<>();
             for (CellRef ref : lc.referenced) {

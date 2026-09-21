@@ -246,13 +246,18 @@ public class CellDialog extends JDialog {
             Expression e = Expression.parse(text, registry);
             Node optimized = e.getOptimized();
             if (optimized instanceof ConstantNode cn) {
-                exprArea.setText(text);
+                // A constant is a value, not an expression: EVALUATE must not turn
+                // it into the cell's source text, and it must not change a cell
+                // content that already is that constant. Only refresh the Value
+                // field when it does not already hold this value.
                 stringArea.setText(cn.toText());
                 xmlArea.setText(nodeXml(cn));
-                Object cv = cn.getValue();
-                valueField.setText(cv == null ? "" : String.valueOf(cv));
                 refArea.setText("");
                 referencedCells = null;
+                Object cv = cn.getValue();
+                if (cv != null && !Cell.isValueText(valueField.getText(), cv)) {
+                    valueField.setText(String.valueOf(cv));
+                }
                 return;
             }			lastNode = optimized;
             exprArea.setText(text);

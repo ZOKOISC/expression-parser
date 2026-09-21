@@ -52,6 +52,7 @@ import javax.swing.table.TableCellRenderer;
 
 import expr.CellRect;
 import expr.CellRef;
+import expr.ConstantNode;
 import expr.DataType;
 import expr.Expression;
 import expr.Node;
@@ -1420,7 +1421,11 @@ public class BookGui {
                 String gridText = src.getRawValue(r, c);
                 String fmt = src.getFormatPattern(r, c);
                 String al = src.getAlignment(r, c);
-                if (cell.getExpression() != null && raw != null && !raw.isEmpty()) {
+                // Only a real expression is re-parsed; a constant node is a value,
+                // so its value text is never carried over as a raw expression.
+                Node srcExpr = cell.getExpression();
+                if (srcExpr != null && !(srcExpr instanceof ConstantNode)
+                        && raw != null && !raw.isEmpty()) {
                     try {
                         Node node = Expression.parse(raw, dst.registry()).getOptimized();
                         // Store the unformatted value as the grid text so it parses
