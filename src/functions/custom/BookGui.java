@@ -1267,7 +1267,8 @@ public class BookGui {
      * Adds a new sheet holding a copy of the selected sheet: cell contents,
      * formulas, values, formatting, alignment, names and named ranges (the copy
      * also inherits the source's column widths). The copy gets the next free auto
-     * name so it can be referenced like any other sheet.
+     * name so it can be referenced like any other sheet, and every expression
+     * node on it is evaluated again in the copy's own context.
      */
     private void doDuplicateSheet() {
         SheetView v = current();
@@ -1286,6 +1287,10 @@ public class BookGui {
             copy.sheet.setBindingsText(varsArea.getText());
             copySheet(src, copy.sheet);
             applyColumnWidths(copy.grid, dataColumnWidths(v.grid));
+            // Every expression node on the new sheet is evaluated again, so the
+            // copy's formulas are computed from the copy's own context (its cells,
+            // and relatives such as prev).
+            copy.sheet.recomputeAll();
         } catch (RuntimeException ex) {
             showError(ex);
             return;
