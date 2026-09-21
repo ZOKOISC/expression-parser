@@ -196,6 +196,11 @@ public class BookAPI implements AutoCloseable {
                     : "The file '" + sourceXmlPath + "' does not contain a proper book XML.";
             throw new IllegalArgumentException(detail + " " + e.getMessage(), e);
         }
+        return buildState(loaded, sourceXmlPath);
+    }
+
+    /** Builds the live book from a parsed model; also used by the payload loader. */
+    private static State buildState(WorkbookIO.LoadedWorkbook loaded, String sourceXmlPath) {
         if (loaded.sheets.isEmpty()) {
             throw new IllegalArgumentException(sourceXmlPath == null
                     ? "The XML text contains no sheets."
@@ -437,8 +442,39 @@ public class BookAPI implements AutoCloseable {
      * again with {@link #loadBook(String)}.
      */
     public String getXml() {
+        return getXml(WorkbookIO.VERSION_1);
+    }
+
+    /** The workbook as XML text in the given format version (1.0, 2.0 or 3.0). */
+    public String getXml(int version) {
         ensureOpen();
-        return WorkbookIO.toXml(book, variablesText);
+        return WorkbookIO.toXml(book, variablesText, null, null, null, version);
+    }
+
+    /**
+     * The whole workbook as one GZIP-compressed binary payload (the v3.0
+     * encoding) - no XML and no Base64 - ready to be sent as a message body
+     * (HTTP, Kafka, files) and rebuilt with {@link #loadPayload(byte[])}.
+     */
+    public byte[] getPayload() {
+        ensureOpen();
+        return WorkbookIO.toPayload(book, variablesText, null, null, null);
+    }
+
+    /** Opens a book from the raw payload produced by {@link #getPayload()}. */
+    public static BookAPI loadPayload(byte[] payload) {
+        return new BookAPI(payloadState(payload));
+    }
+
+    /** Builds the shared state from a v3 payload. */
+    protected static State payloadState(byte[] payload) {
+        WorkbookIO.LoadedWorkbook loaded;
+        try {
+            loaded = WorkbookIO.fromPayload(payload);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("Not a valid workbook payload: " + e.getMessage(), e);
+        }
+        return buildState(loaded, null);
     }
 
     // ------------------------------------------------------------------- closing

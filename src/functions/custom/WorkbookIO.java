@@ -24,6 +24,7 @@ import expr.CellRect;
 import expr.CellRef;
 import expr.DataType;
 import expr.Node;
+import expr.NodeCodec;
 
 /**
  * Saves and restores the actual content of a {@link SheetBook} (the variables
@@ -110,6 +111,8 @@ public final class WorkbookIO {
         public final List<String> visualOrder = new ArrayList<>();
         /** Saved active tab as the sheet's UUID, or null. */
         public String activeSheet;
+        /** Workbook format version: {@link #VERSION_1} or {@link #VERSION_2}. */
+        public int version = VERSION_1;
 
         public LoadedWorkbook(String variablesText) {
             this.variablesText = variablesText;
@@ -119,9 +122,19 @@ public final class WorkbookIO {
     private WorkbookIO() {
     }
 
+    /** Version 1: expression trees as XML {@code <node>} elements. */
+    public static final int VERSION_1 = 1;
+    /** Version 2: expression trees as a compact Base64 binary stream. */
+    public static final int VERSION_2 = 2;
+    /**
+     * Version 3: the whole workbook as one GZIP-compressed binary payload
+     * (Base64 in the file, raw bytes via {@link #toPayload}).
+     */
+    public static final int VERSION_3 = 3;
+
     /** Serializes the workbook without a saved tab order or active tab. */
     public static String toXml(SheetBook book, String variablesText) {
-        return toXml(book, variablesText, null, null, null);
+        return toXml(book, variablesText, null, null, null, VERSION_1);
     }
 
     /**
@@ -132,7 +145,7 @@ public final class WorkbookIO {
      */
     public static String toXml(SheetBook book, String variablesText,
                                List<String> visualOrder, String activeSheet) {
-        return toXml(book, variablesText, visualOrder, activeSheet, null);
+        return toXml(book, variablesText, visualOrder, activeSheet, null, VERSION_1);
     }
 
     /**
@@ -143,12 +156,29 @@ public final class WorkbookIO {
     public static String toXml(SheetBook book, String variablesText,
                                List<String> visualOrder, String activeSheet,
                                List<List<Integer>> columnWidths) {
+        return toXml(book, variablesText, visualOrder, activeSheet, columnWidths, VERSION_1);
+    }
+
+    /**
+     * Serializes the workbook. {@code format} selects how expression trees are
+     * stored: {@link #VERSION_1} writes the XML {@code <node>} elements,
+     * {@link #VERSION_2} writes a compact Base64 binary tree; the chosen version
+     * is recorded in the {@code version} attribute of the root element so loading
+     * detects it automatically.
+     */
+    public static String toXml(SheetBook book, String variablesText,
+                               List<String> visualOrder, String activeSheet,
+                               List<List<Integer>> columnWidths, int format) {
+        if (format >= VERSION_3) {
+            return v3Xml(book, variablesText, visualOrder, activeSheet, columnWidths);
+        }
         try {
             DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
             DocumentBuilder db = dbf.newDocumentBuilder();
             Document doc = db.newDocument();
 
             Element root = doc.createElement("workbook");
+            root.setAttribute("version", format >= VERSION_2 ? "2.0" : "1.0");
             doc.appendChild(root);
 
             // Section 1 - calculation: only what is needed to evaluate and
@@ -233,7 +263,7 @@ public final class WorkbookIO {
                         String rawExpr = cell == null ? null : cell.getRawExpression();
                         String raw = rawExpr == null ? gridText : rawExpr;
                         boolean hasExpression = cell != null && cell.getExpression() != null;
-                        String format = sheet.getFormatPattern(r, c);
+                        String fmt = sheet.getFormatPattern(r, c);
                         String alignment = sheet.getAlignment(r, c);
                         if ((raw != null && !raw.trim().isEmpty()) || hasExpression) {
                             Element cellEl = doc.createElement("cell");
@@ -250,7 +280,11 @@ public final class WorkbookIO {
                                     cellEl.setAttribute("error", cell.getErrorMessage());
                                 }
                                 Element exprEl = doc.createElement("expr");
-                                exprEl.appendChild(cell.getExpression().toXml(doc));
+                                if (format >= VERSION_2) {
+                                    exprEl.setAttribute("b64", NodeCodec.toBase64(cell.getExpression()));
+                                } else {
+                                    exprEl.appendChild(cell.getExpression().toXml(doc));
+                                }
                                 cellEl.appendChild(exprEl);
                             }
                             if (cell != null) {
@@ -266,14 +300,14 @@ public final class WorkbookIO {
                             calcCellsEl.appendChild(cellEl);
                         }
                         if ((gridText != null && !gridText.trim().isEmpty())
-                                || (format != null && !format.isEmpty())
+                                || (fmt != null && !fmt.isEmpty())
                                 || (alignment != null && !alignment.isEmpty())) {
                             Element cellEl = doc.createElement("cell");
                             cellEl.setAttribute("row", String.valueOf(r + 1));
                             cellEl.setAttribute("col", String.valueOf(c));
                             cellEl.setAttribute("text", gridText == null ? "" : gridText);
-                            if (format != null && !format.isEmpty()) {
-                                cellEl.setAttribute("format", format);
+                            if (fmt != null && !fmt.isEmpty()) {
+                                cellEl.setAttribute("format", fmt);
                             }
                             if (alignment != null && !alignment.isEmpty()) {
                                 cellEl.setAttribute("align", alignment);
@@ -321,6 +355,109 @@ public final class WorkbookIO {
         }
     }
 
+    /**
+     * v3.0 file: a minimal XML envelope holding the Base64 of the GZIP-compressed
+     * binary workbook payload. Loading it skips DOM traversal entirely.
+     */
+    private static String v3Xml(SheetBook book, String variablesText,
+                                List<String> visualOrder, String activeSheet,
+                                List<List<Integer>> columnWidths) {
+        String payload = WorkbookCodec.toBase64(
+                snapshot(book, variablesText, visualOrder, activeSheet, columnWidths));
+        StringBuilder sb = new StringBuilder();
+        sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n");
+        sb.append("<workbook version=\"3.0\" encoding=\"gzip+base64\">\n");
+        sb.append("  <payload>").append(payload).append("</payload>\n");
+        sb.append("</workbook>\n");
+        return sb.toString();
+    }
+
+    /**
+     * The v3 payload bytes of the live workbook - the GZIP-compressed binary
+     * workbook, ready to be sent as a message body (HTTP, Kafka) and read back
+     * with {@link #fromPayload(byte[])} without any XML.
+     */
+    public static byte[] toPayload(SheetBook book, String variablesText,
+                                   List<String> visualOrder, String activeSheet,
+                                   List<List<Integer>> columnWidths) {
+        return WorkbookCodec.toPayload(
+                snapshot(book, variablesText, visualOrder, activeSheet, columnWidths));
+    }
+
+    /** Parses a v3 payload (from {@link #toPayload}) back into the model. */
+    public static LoadedWorkbook fromPayload(byte[] payload) {
+        return WorkbookCodec.fromPayload(payload);
+    }
+
+    /**
+     * Collects the live workbook into the {@link LoadedWorkbook} model: every
+     * sheet's cells with their source, type, value, error, expression tree,
+     * referenced set and ordered recalculation list, plus names, ranges, column
+     * widths, the tab order and the active tab. A deleted sheet's ghost slot
+     * (0x0) is skipped, matching the XML writers.
+     */
+    public static LoadedWorkbook snapshot(SheetBook book, String variablesText,
+                                          List<String> visualOrder, String activeSheet,
+                                          List<List<Integer>> columnWidths) {
+        LoadedWorkbook wb = new LoadedWorkbook(variablesText == null ? "" : variablesText);
+        wb.fullyStored = true;
+        if (visualOrder != null) {
+            wb.visualOrder.addAll(visualOrder);
+        }
+        wb.activeSheet = activeSheet;
+        for (int s = 0; s < book.size(); s++) {
+            Sheet sheet = book.get(s);
+            if (sheet == null || (sheet.rows() == 0 && sheet.cols() == 0)) {
+                continue;
+            }
+            LoadedSheet ls = new LoadedSheet(sheet.rows(), sheet.cols());
+            ls.name = sheet.name();
+            ls.uuid = sheet.uuid();
+            for (Map.Entry<String, CellRef> e : sheet.namedRefs().entrySet()) {
+                CellRef r = e.getValue().normalize(sheet.sheetIndex());
+                ls.names.put(e.getKey(), new CellRef(r.getSheet(), r.getRow(), r.getCol()));
+            }
+            for (Map.Entry<String, CellRect> e : sheet.namedRanges().entrySet()) {
+                CellRect r = e.getValue().normalize(sheet.sheetIndex());
+                ls.ranges.put(e.getKey(),
+                        new CellRect(r.getSheet(), r.getRow0(), r.getCol0(), r.getRow1(), r.getCol1()));
+            }
+            if (columnWidths != null && s < columnWidths.size() && columnWidths.get(s) != null) {
+                ls.columnWidths.addAll(columnWidths.get(s));
+            }
+            for (int r = 0; r < sheet.rows(); r++) {
+                for (int c = 1; c <= sheet.cols(); c++) {
+                    String gridText = sheet.getRawValue(r, c);
+                    Cell cell = sheet.registeredCell(r, c);
+                    String rawExpr = cell == null ? null : cell.getRawExpression();
+                    String raw = rawExpr == null ? gridText : rawExpr;
+                    boolean hasExpression = cell != null && cell.getExpression() != null;
+                    String fmt = sheet.getFormatPattern(r, c);
+                    String alignment = sheet.getAlignment(r, c);
+                    boolean hasEval = (raw != null && !raw.trim().isEmpty()) || hasExpression;
+                    boolean hasView = (gridText != null && !gridText.trim().isEmpty())
+                            || (fmt != null && !fmt.isEmpty())
+                            || (alignment != null && !alignment.isEmpty());
+                    if (!hasEval && !hasView) {
+                        continue;
+                    }
+                    DataType type = cell == null ? Cell.parse(gridText).getType() : cell.getType();
+                    String value = hasExpression ? Cell.encodeValue(cell.getValue()) : null;
+                    String error = cell != null && cell.getErrorMessage() != null
+                            && !cell.getErrorMessage().isEmpty() ? cell.getErrorMessage() : null;
+                    List<CellRef> refs = cell == null || cell.getReferenced() == null
+                            ? null : new ArrayList<>(cell.getReferenced());
+                    List<CellRef> deps = cell == null || cell.getDependents() == null
+                            ? null : new ArrayList<>(cell.getDependents());
+                    ls.cells.add(new LoadedCell(r, c - 1, hasView ? gridText : raw, raw, type, fmt, alignment,
+                            hasExpression ? cell.getExpression() : null, refs, deps, value, error));
+                }
+            }
+            wb.sheets.add(ls);
+        }
+        return wb;
+    }
+
     public static LoadedWorkbook fromXml(String xml) {
         try {
             DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
@@ -328,6 +465,17 @@ public final class WorkbookIO {
             Document doc = db.parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
 
             Element root = doc.getDocumentElement();
+            // The saved format version (absent in older files -> v1.0).
+            String versionAttr = root == null ? "" : root.getAttribute("version");
+            int version = versionAttr.startsWith("3") ? VERSION_3
+                    : versionAttr.startsWith("2") ? VERSION_2 : VERSION_1;
+            if (version == VERSION_3) {
+                Element payloadEl = firstChild(doc, "payload");
+                if (payloadEl == null) {
+                    throw new RuntimeException("The v3.0 workbook has no <payload> element.");
+                }
+                return WorkbookCodec.fromBase64(payloadEl.getTextContent());
+            }
             // New (split) format: <calculation> (evaluation data) + <presentation>.
             Element calcEl = childElement(root, "calculation");
             boolean split = calcEl != null;
@@ -336,6 +484,7 @@ public final class WorkbookIO {
             String variablesText = vars == null ? "" : vars.getTextContent();
 
             LoadedWorkbook wb = new LoadedWorkbook(variablesText == null ? "" : variablesText);
+            wb.version = version;
             Element sheetsEl = split ? childElement(calcEl, "sheets") : firstChild(doc, "sheets");
             // Presentation cells per sheet, keyed "row,col" (0-based).
             List<Map<String, Element>> presentation = new ArrayList<>();
@@ -415,13 +564,17 @@ public final class WorkbookIO {
                         Element exprEl = childElement(cellEl, "expr");
                         Node expression = null;
                         if (exprEl != null) {
-                            Element nodeEl = firstChildElement(exprEl);
-                            if (nodeEl != null) {
-                                try {
-                                    expression = Node.fromXml(nodeEl);
-                                } catch (RuntimeException ex) {
-                                    expression = null;
+                            try {
+                                if (exprEl.hasAttribute("b64")) {
+                                    expression = NodeCodec.fromBase64(strAttr(exprEl, "b64"));
+                                } else {
+                                    Element nodeEl = firstChildElement(exprEl);
+                                    if (nodeEl != null) {
+                                        expression = Node.fromXml(nodeEl);
+                                    }
                                 }
+                            } catch (RuntimeException ex) {
+                                expression = null;
                             }
                         }
                         boolean isFormula = raw != null && (text == null || !raw.equals(text));

@@ -82,6 +82,8 @@ public class SheetGui {
     private File currentDir;
     /** XML file the current content was loaded from or saved to, or null. */
     private Path currentFile;
+    /** Workbook format version used by the last save/load (default v1.0). */
+    private int saveVersion = WorkbookIO.VERSION_1;
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(SheetGui::new);
@@ -717,11 +719,16 @@ public class SheetGui {
 
     /**
      * Saves the current content. When a file is loaded (or was previously saved),
-     * it is written back in place; otherwise this behaves like Save As.
+     * it is written back in place; otherwise this behaves like Save As. Either
+     * way it first asks which workbook format version to write.
      */
     private void doSaveXml() {
         if (currentFile != null) {
-            saveTo(currentFile);
+            int version = chooseSaveVersion();
+            if (version == 0) {
+                return;
+            }
+            saveTo(currentFile, version);
         } else {
             doSaveXmlAs();
         }
@@ -742,21 +749,56 @@ public class SheetGui {
         if (fc.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
             return;
         }
-        saveTo(fc.getSelectedFile().toPath());
+        int version = chooseSaveVersion();
+        if (version == 0) {
+            return;
+        }
+        saveTo(fc.getSelectedFile().toPath(), version);
     }
 
-    private void saveTo(Path target) {
+    private void saveTo(Path target, int version) {
         try {
+            saveVersion = version;
             List<List<Integer>> widths = List.of(dataColumnWidths(view.grid));
-            String xml = WorkbookIO.toXml(book, varsArea.getText(), null, null, widths);
+            String xml = WorkbookIO.toXml(book, varsArea.getText(), null, null, widths, version);
             Files.writeString(target, xml);
             currentFile = target.toAbsolutePath().normalize();
             currentDir = currentFile.getParent() != null ? currentFile.getParent().toFile() : null;
             updateTitle();
-            setStatus("Workbook saved to " + currentFile.getFileName());
+            setStatus("Workbook saved to " + currentFile.getFileName()
+                    + " (v" + versionName(version) + ")");
         } catch (Exception ex) {
             showError(ex);
         }
+    }
+
+    /**
+     * Asks which workbook format version to save: v1.0 (readable XML node trees)
+     * or v2.0 (compact Base64 binary trees). Remembers the choice for the next
+     * save and returns 0 when the user cancels.
+     */
+    private int chooseSaveVersion() {
+        Object[] options = {"v1.0 (XML)", "v2.0 (base64)", "v3.0 (gzip package)"};
+        int initial = saveVersion >= WorkbookIO.VERSION_3 ? 2
+                : saveVersion >= WorkbookIO.VERSION_2 ? 1 : 0;
+        int choice = JOptionPane.showOptionDialog(frame,
+                "Save the workbook as which format version?",
+                "Workbook format", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE,
+                null, options, options[initial]);
+        if (choice < 0) {
+            return 0;
+        }
+        return switch (choice) {
+            case 1 -> WorkbookIO.VERSION_2;
+            case 2 -> WorkbookIO.VERSION_3;
+            default -> WorkbookIO.VERSION_1;
+        };
+    }
+
+    /** The display name of a workbook format version. */
+    private static String versionName(int version) {
+        return version >= WorkbookIO.VERSION_3 ? "3.0"
+                : version >= WorkbookIO.VERSION_2 ? "2.0" : "1.0";
     }
 
     private void doOpenXml() {
@@ -818,6 +860,7 @@ public class SheetGui {
         view = createSheetView();
         view.sheet.setName(ls.name);
         view.sheet.setUuid(ls.uuid);
+        saveVersion = loaded.version;
         view.model.setSheetSize(ls.rows, ls.cols);
         installRenderers(view);
         resizeRowNumberColumn(view.grid, ls.rows);

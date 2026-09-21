@@ -87,6 +87,8 @@ public class BookGui {
     private File currentDir;
     /** XML file the workbook was loaded from, or the last file it was saved to. */
     private Path currentFile;
+    /** Workbook format version used by the last save/load (default v1.0). */
+    private int saveVersion = WorkbookIO.VERSION_1;
     /** Tab being dragged when reordering sheets; -1 when idle. */
     private int dragFrom = -1;
     /** Tab index currently held by the drag-to-reorder gesture, or -1. */
@@ -910,10 +912,15 @@ public class BookGui {
      * Saves the whole workbook - every sheet plus the variables - as one XML
      * file. When the workbook was loaded from (or previously saved to) a file,
      * it is written back to that same file; otherwise this behaves like Save As.
+     * Either way it first asks which workbook format version to write.
      */
     private void doSaveXml() {
         if (currentFile != null) {
-            saveTo(currentFile);
+            int version = chooseSaveVersion();
+            if (version == 0) {
+                return;
+            }
+            saveTo(currentFile, version);
         } else {
             doSaveXmlAs();
         }
@@ -931,12 +938,17 @@ public class BookGui {
         if (fc.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
             return;
         }
-        saveTo(fc.getSelectedFile().toPath());
+        int version = chooseSaveVersion();
+        if (version == 0) {
+            return;
+        }
+        saveTo(fc.getSelectedFile().toPath(), version);
     }
 
     /** Writes every sheet and the variables to one workbook XML file. */
-    private void saveTo(Path target) {
+    private void saveTo(Path target, int version) {
         try {
+            saveVersion = version;
             List<String> order = new ArrayList<>();
             List<List<Integer>> widths = new ArrayList<>();
             for (int i = 0; i < book.size(); i++) {
@@ -951,15 +963,45 @@ public class BookGui {
             }
             SheetView active = current();
             String activeUuid = active == null ? null : active.sheet.uuid();
-            String xml = WorkbookIO.toXml(book, varsArea.getText(), order, activeUuid, widths);
+            String xml = WorkbookIO.toXml(book, varsArea.getText(), order, activeUuid, widths, version);
             Files.writeString(target, xml);
             currentFile = target.toAbsolutePath().normalize();
             currentDir = currentFile.getParent() != null ? currentFile.getParent().toFile() : null;
             updateTitle();
-            setStatus("Workbook saved to " + currentFile.getFileName());
+            setStatus("Workbook saved to " + currentFile.getFileName()
+                    + " (v" + versionName(version) + ")");
         } catch (Exception ex) {
             showError(ex);
         }
+    }
+
+    /**
+     * Asks which workbook format version to save: v1.0 (readable XML node trees)
+     * or v2.0 (compact Base64 binary trees). Remembers the choice for the next
+     * save and returns 0 when the user cancels.
+     */
+    private int chooseSaveVersion() {
+        Object[] options = {"v1.0 (XML)", "v2.0 (base64)", "v3.0 (gzip package)"};
+        int initial = saveVersion >= WorkbookIO.VERSION_3 ? 2
+                : saveVersion >= WorkbookIO.VERSION_2 ? 1 : 0;
+        int choice = JOptionPane.showOptionDialog(frame,
+                "Save the workbook as which format version?",
+                "Workbook format", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE,
+                null, options, options[initial]);
+        if (choice < 0) {
+            return 0;
+        }
+        return switch (choice) {
+            case 1 -> WorkbookIO.VERSION_2;
+            case 2 -> WorkbookIO.VERSION_3;
+            default -> WorkbookIO.VERSION_1;
+        };
+    }
+
+    /** The display name of a workbook format version. */
+    private static String versionName(int version) {
+        return version >= WorkbookIO.VERSION_3 ? "3.0"
+                : version >= WorkbookIO.VERSION_2 ? "2.0" : "1.0";
     }
 
     private void doOpenXml() {
@@ -992,6 +1034,7 @@ public class BookGui {
     public void applyWorkbook(WorkbookIO.LoadedWorkbook loaded, File sourceDir, Path sourceFile) {
         currentDir = sourceDir;
         currentFile = sourceFile == null ? null : sourceFile.toAbsolutePath().normalize();
+        saveVersion = loaded.version;
         tabs.removeAll();
         for (SheetView sv : new ArrayList<>(sheets)) {
             int idx = book.indexOf(sv.sheet);
