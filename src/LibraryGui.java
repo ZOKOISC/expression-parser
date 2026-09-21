@@ -26,6 +26,7 @@ import functions.custom.Library;
 import functions.custom.Sheet;
 import functions.custom.SheetBook;
 import functions.custom.WorkbookIO;
+import functions.custom.BookGui;
 
 /**
  * Library manager GUI. Shows the library's default folder (editable) and its

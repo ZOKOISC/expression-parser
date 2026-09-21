@@ -1,3 +1,5 @@
+package functions.custom;
+
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -625,10 +627,10 @@ public class BookGui {
         JMenuItem editCell = new JMenuItem("Edit cell content...");
         editCell.addActionListener(ev -> showEditDialog(v, row, col, cell));
         menu.add(editCell);
-        JMenuItem namedCells = new JMenuItem("Named cells…");
+        JMenuItem namedCells = new JMenuItem("Named cellsâ€¦");
         namedCells.addActionListener(ev -> openNamedCellsPopup(v, row, col));
         menu.add(namedCells);
-        JMenuItem setFormat = new JMenuItem("Set format pattern…");
+        JMenuItem setFormat = new JMenuItem("Set format patternâ€¦");
         setFormat.addActionListener(ev -> {
             String pat = JOptionPane.showInputDialog(v.grid,
                     "Enter Java format pattern (e.g. #,##0.00, yyyy-MM-dd, HH:mm):",
@@ -974,59 +976,69 @@ public class BookGui {
     private void loadWorkbook(Path file) {
         try {
             WorkbookIO.LoadedWorkbook loaded = WorkbookIO.fromXml(Files.readString(file));
-            currentDir = file.getParent() != null ? file.getParent().toFile() : null;
-            currentFile = file.toAbsolutePath().normalize();
-            tabs.removeAll();
-            for (SheetView sv : new ArrayList<>(sheets)) {
-                book.remove(book.indexOf(sv.sheet));
-            }
-            sheets.clear();
-            book = new SheetBook();
-            varsArea.setText(loaded.variablesText);
-            List<SheetView> created = new ArrayList<>();
-            List<WorkbookIO.LoadedSheet> kept = new ArrayList<>();
-            for (WorkbookIO.LoadedSheet ls : loaded.sheets) {
-                if (ls.rows == 0 && ls.cols == 0) {
-                    continue;   // a deleted sheet's ghost slot is not restored
-                }
-                SheetView v = createSheetView();
-                v.sheet.setName(ls.name);
-                v.sheet.setUuid(ls.uuid);
-                v.model.setSheetSize(ls.rows, ls.cols);
-                installRenderers(v);
-                resizeRowNumberColumn(v.grid, ls.rows);
-                applyColumnWidths(v.grid, ls.columnWidths);
-                v.sheet.setNamedRefs(ls.names);
-                v.sheet.setNamedRanges(ls.ranges);
-                tabs.addTab(v.sheet.name(), scrollFor(v));
-                created.add(v);
-                kept.add(ls);
-            }
-            // Restore cells only once every sheet name and named reference exists,
-            // so cross-sheet references (s1.Name) resolve while loading.
-            for (int i = 0; i < created.size(); i++) {
-                SheetView v = created.get(i);
-                for (WorkbookIO.LoadedCell lc : kept.get(i).cells) {
-                    v.sheet.restoreCell(lc);
-                }
-            }
-            for (SheetView v : sheets) {
-                v.sheet.setBindingsText(varsArea.getText());
-                if (!loaded.fullyStored) {
-                    v.sheet.recomputeAll();
-                }
-                v.grid.repaint();
-            }
-            if (!sheets.isEmpty()) {
-                tabs.setSelectedIndex(0);
-            }
-            applyVisualOrder(loaded.visualOrder, loaded.activeSheet);
-            updateGridSizeFields();
-            updateTitle();
+            applyWorkbook(loaded, file.getParent() != null ? file.getParent().toFile() : null, file);
             setStatus("Workbook loaded from " + file.getFileName());
         } catch (Exception ex) {
             showError(ex);
         }
+    }
+
+    /**
+     * Applies parsed workbook content to this editor: rebuilds the tabs from the
+     * loaded sheets and restores their cells, names, formats and column widths,
+     * then the saved tab order and active tab. This is the no-dialog entry point
+     * used by {@code BookGuiAPI.show()} to display a book without a file chooser.
+     */
+    public void applyWorkbook(WorkbookIO.LoadedWorkbook loaded, File sourceDir, Path sourceFile) {
+        currentDir = sourceDir;
+        currentFile = sourceFile == null ? null : sourceFile.toAbsolutePath().normalize();
+        tabs.removeAll();
+        for (SheetView sv : new ArrayList<>(sheets)) {
+            int idx = book.indexOf(sv.sheet);
+            if (idx >= 0) {
+                book.remove(idx);
+            }
+        }
+        sheets.clear();
+        book = new SheetBook();
+        varsArea.setText(loaded.variablesText);
+        List<SheetView> created = new ArrayList<>();
+        List<WorkbookIO.LoadedSheet> kept = new ArrayList<>();
+        for (WorkbookIO.LoadedSheet ls : loaded.sheets) {
+            if (ls.rows == 0 && ls.cols == 0) {
+                continue;   // a deleted sheet's ghost slot is not restored
+            }
+            SheetView v = createSheetView();
+            v.sheet.setName(ls.name);
+            v.sheet.setUuid(ls.uuid);
+            v.model.setSheetSize(ls.rows, ls.cols);
+            installRenderers(v);
+            resizeRowNumberColumn(v.grid, ls.rows);
+            applyColumnWidths(v.grid, ls.columnWidths);
+            v.sheet.setNamedRefs(ls.names);
+            v.sheet.setNamedRanges(ls.ranges);
+            tabs.addTab(v.sheet.name(), scrollFor(v));
+            created.add(v);
+            kept.add(ls);
+        }
+        // Restore cells only once every sheet name and named reference exists,
+        // so cross-sheet references (s1.Name) resolve while loading.
+        for (int i = 0; i < created.size(); i++) {
+            SheetView v = created.get(i);
+            for (WorkbookIO.LoadedCell lc : kept.get(i).cells) {
+                v.sheet.restoreCell(lc);
+            }
+        }
+        for (SheetView v : sheets) {
+            v.sheet.setBindingsText(varsArea.getText());
+            if (!loaded.fullyStored) {
+                v.sheet.recomputeAll();
+            }
+            v.grid.repaint();
+        }
+        applyVisualOrder(loaded.visualOrder, loaded.activeSheet);
+        updateGridSizeFields();
+        updateTitle();
     }
 
     /**
