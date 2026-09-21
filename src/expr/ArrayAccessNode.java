@@ -54,7 +54,7 @@ public class ArrayAccessNode extends Node {
     public Object evaluate(Map<String, Object> bindings, FunctionRegistry registry) {
         Object arr = bindings.get(name);
         if (arr == null) {
-            throw new ExpressionException("No array provided for '" + name + "'.");
+            throw new ExpressionException("No array or sheet is bound to '" + name + "'.");
         }
         if (cellName != null) {
             return evaluateNamedCell(arr, registry, bindings);

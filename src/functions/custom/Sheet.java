@@ -46,12 +46,26 @@ public class Sheet implements CellProvider {
     private final Set<String> injectedSheetNameBindings = new LinkedHashSet<>();
     /** Keys of the cross-sheet bindings injected by {@link #refreshCrossSheetBindings()}. */
     private final Set<String> injectedCrossSheetBindings = new LinkedHashSet<>();
+    /** Keys of the relative-sheet bindings injected by {@link #injectRelativeSheet()}. */
+    private final Set<String> injectedRelativeBindings = new LinkedHashSet<>();
     /** User variable names of the current variables text (sheet names excluded). */
     private final Set<String> variableNames = new LinkedHashSet<>();
     /** Variable names ignored because a sheet of the workbook uses them. */
     private final Set<String> ignoredVariableNames = new LinkedHashSet<>();
     private int activeRow = 0;
     private int activeCol = 0;
+
+    /**
+     * Reserved qualifier naming the sheet before this one in tab order, usable as
+     * {@code prev[row,col]}, {@code prev[cellName]} and {@code prev.Name}. It is
+     * reserved: no sheet, variable, named cell or named range may use this name.
+     */
+    public static final String PREV_SHEET = "prev";
+
+    /** True when {@code name} is a reserved qualifier (currently {@code prev}). */
+    public static boolean isReservedQualifier(String name) {
+        return name != null && PREV_SHEET.equalsIgnoreCase(name.trim());
+    }
 
     public Sheet() {
     }
@@ -93,6 +107,10 @@ public class Sheet implements CellProvider {
 
     public void setName(String name) {
         String newName = name == null ? "" : name.trim();
+        if (isReservedQualifier(newName)) {
+            throw new IllegalArgumentException("Sheet name '" + newName
+                    + "' is reserved (it references the previous sheet); choose another name.");
+        }
         if (!newName.isEmpty() && book != null) {
             String clash = nameClash(newName);
             if (clash != null) {
@@ -127,8 +145,12 @@ public class Sheet implements CellProvider {
         return null;
     }
 
-    /** Rejects a cell/range name that a sheet of the workbook already uses. */
+    /** Rejects a cell/range name that a sheet already uses or that is reserved. */
     private void requireNotSheetName(String name) {
+        if (isReservedQualifier(name)) {
+            throw new IllegalArgumentException("Name '" + name
+                    + "' is reserved (it references the previous sheet); choose another name.");
+        }
         if (book == null) {
             return;
         }
@@ -206,9 +228,10 @@ public class Sheet implements CellProvider {
         variableNames.clear();
         ignoredVariableNames.clear();
         for (Map.Entry<String, Object> e : parseBindings(text).entrySet()) {
-            // A user variable must not shadow a sheet name: the sheet name wins,
-            // so a colliding definition is ignored (and reported).
-            if (isSheetName(e.getKey())) {
+            // A user variable must not shadow a sheet name or a reserved
+            // qualifier: the qualifier wins, so a colliding definition is
+            // ignored (and reported).
+            if (isSheetName(e.getKey()) || isReservedQualifier(e.getKey())) {
                 ignoredVariableNames.add(e.getKey());
                 continue;
             }
@@ -277,6 +300,41 @@ public class Sheet implements CellProvider {
             }
             bindings.put(sheetName, new SheetSlot(slot, candidate.namedRefs));
             injectedSheetNameBindings.add(sheetName);
+        }
+        injectRelativeSheet();
+    }
+
+    /**
+     * Binds the reserved qualifier {@code prev} - the sheet before this one in tab
+     * order - as a {@link SheetSlot} (so {@code prev[row,col]} and
+     * {@code prev[cellName]} resolve) plus {@code prev.<name>} keys for its named
+     * cells and ranges. The binding is absent on the first sheet.
+     */
+    private void injectRelativeSheet() {
+        for (String key : injectedRelativeBindings) {
+            bindings.remove(key);
+        }
+        injectedRelativeBindings.clear();
+        if (book == null) {
+            return;
+        }
+        Sheet prev = book.previousSheet(this);
+        if (prev == null) {
+            return;
+        }
+        bindings.put(PREV_SHEET, new SheetSlot(prev.sheetIndex() + 1, prev.namedRefs));
+        injectedRelativeBindings.add(PREV_SHEET);
+        String prefix = PREV_SHEET + ".";
+        for (Map.Entry<String, CellRef> e : prev.namedRefs.entrySet()) {
+            Cell c = prev.cell(e.getValue().getRow(), e.getValue().getCol() + 1);
+            String key = prefix + e.getKey();
+            bindings.put(key, c == null ? null : c.getValue());
+            injectedRelativeBindings.add(key);
+        }
+        for (Map.Entry<String, CellRect> e : prev.namedRanges.entrySet()) {
+            String key = prefix + e.getKey();
+            bindings.put(key, prev.rangeBinding(e.getValue()));
+            injectedRelativeBindings.add(key);
         }
     }
 
@@ -517,6 +575,17 @@ public class Sheet implements CellProvider {
     }
 
     /**
+     * The sheet a reference qualifier names: a real sheet name, or the reserved
+     * {@code prev} (the previous live sheet in tab order). Null when absent.
+     */
+    private Sheet sheetFor(String qualifier) {
+        if (isReservedQualifier(qualifier)) {
+            return book == null ? null : book.previousSheet(this);
+        }
+        return sheetByName(qualifier);
+    }
+
+    /**
      * The CellRef behind a {@code "<sheetName>.<cellName>"} reference (normalized
      * to that sheet), or null when the sheet or the name does not exist.
      */
@@ -525,7 +594,7 @@ public class Sheet implements CellProvider {
         if (dot <= 0 || dot >= dotted.length() - 1) {
             return null;
         }
-        Sheet target = sheetByName(dotted.substring(0, dot));
+        Sheet target = sheetFor(dotted.substring(0, dot));
         if (target == null) {
             return null;
         }
@@ -543,7 +612,7 @@ public class Sheet implements CellProvider {
         if (dot <= 0 || dot >= dotted.length() - 1) {
             return null;
         }
-        Sheet target = sheetByName(dotted.substring(0, dot));
+        Sheet target = sheetFor(dotted.substring(0, dot));
         if (target == null) {
             return null;
         }
@@ -675,6 +744,14 @@ public class Sheet implements CellProvider {
         alignments.keySet().removeIf(k -> k.startsWith(prefix));
         namedRefs.clear();
         namedRanges.clear();
+    }
+
+    /**
+     * True when this sheet is a deleted sheet's closed slot: it keeps its index
+     * (so expression references stay valid) but holds no cells or names.
+     */
+    public boolean isClosed() {
+        return rows() == 0 && cols() == 0;
     }
 
     @Override
@@ -885,7 +962,7 @@ public class Sheet implements CellProvider {
         if (book == null) {
             return false;
         }
-        Sheet target = sheetByName(sheetName);
+        Sheet target = sheetFor(sheetName);
         if (target == null) {
             return false;
         }
@@ -917,7 +994,7 @@ public class Sheet implements CellProvider {
         if (dot >= 0 && dot < cell.length() - 1) {
             cell = cell.substring(dot + 1);    // "name[Sheet.Cell]" keeps the cell part
         }
-        Sheet target = sheetByName(qualifier);
+        Sheet target = sheetFor(qualifier);
         if (target != null) {
             CellRef ref = target.namedRefs().get(cell);
             if (ref == null) {

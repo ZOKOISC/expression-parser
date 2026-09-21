@@ -77,6 +77,7 @@ public class BookApiSample {
             printResults("   changed: ", changed);
             check(findValue(changed, 2, 1, 1), 40.0, "S2!A1 recalculated on another sheet to 40");
             check(findValue(changed, 2, 1, 2), 20.0, "S2!B1 = S1[Base] recalculated to 20");
+            check(findValue(changed, 3, 3, 1), 40.0, "S3!A3 = prev[1,1] cascaded to S2!A1 = 40");
 
             // d) set expressions on a third sheet, referencing S1 by name and by call
             System.out.println();
@@ -114,6 +115,8 @@ public class BookApiSample {
                         "reloaded S2!A1 = 40");
                 check(value(reloaded.getCellValues(List.of(cell("S1", 3, 1))), 1, 3, 1), 4.0,
                         "reloaded S1!A3 = Block[Four] = 4");
+                check(value(reloaded.getCellValues(List.of(cell("S3", 3, 1))), 3, 3, 1), 40.0,
+                        "reloaded S3!A3 = prev[1,1] = 40");
             }
 
             // h) close kills the API object
@@ -158,9 +161,10 @@ public class BookApiSample {
         SheetBook book = new SheetBook();
         Sheet s1 = sheet(book, "S1");
         Sheet s2 = sheet(book, "S2");
-        sheet(book, "S3");
+        Sheet s3 = sheet(book, "S3");
         s1.setSize(5, 5);
         s2.setSize(5, 5);
+        s3.setSize(5, 5);
         s1.setRawValue(0, 1, "9");
         s1.setCellName(0, 1, "Base");
         s1.setRawValue(0, 2, "4");
@@ -178,6 +182,10 @@ public class BookApiSample {
         Node t = Expression.parse("S1[Base] + 0", s2.registry()).getOptimized();
         s2.saveCell(0, 2, "", "S1[Base] + 0", t, DataType.NUMERIC, t.collectReferenced(), null, null);
         s2.recomputeDependentsOnEdit(0, 2);
+        // S3!A3 = the same cell on the previous sheet (S2)
+        Node p = Expression.parse("prev[1,1] + 0", s3.registry()).getOptimized();
+        s3.saveCell(2, 1, "", "prev[1,1] + 0", p, DataType.NUMERIC, p.collectReferenced(), null, null);
+        s3.recomputeDependentsOnEdit(2, 1);
         Files.writeString(file, WorkbookIO.toXml(book, "x = 4"));
     }
 

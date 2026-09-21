@@ -704,7 +704,7 @@ public class SheetGui {
             setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed."
                     + (v.sheet.ignoredVariableNames().isEmpty() ? ""
                             : "  [ignored variable(s) " + v.sheet.ignoredVariableNames()
-                                    + ": the name is used by a sheet]"));
+                                    + ": the name is used by a sheet or reserved]"));
         } catch (Exception ex) {
             showError(ex);
         }
@@ -930,7 +930,9 @@ public class SheetGui {
         return "<html>Reference a cell on another sheet as <b>Sheet[row, col]</b> (1-based), "
                 + "a cell of a named range as <b>Range[row, col]</b>, a named cell inside a range "
                 + "as <b>Range[cellName]</b>, or a named cell of a sheet as <b>Sheet[cellName]</b>.<br>"
-                + "Variables, variable arrays and named cells/ranges must not use a sheet name "
-                + "- a sheet name always wins.</html>";
+                + "<b>prev</b> is the previous sheet: <b>prev[row, col]</b>, <b>prev[cellName]</b>, "
+                + "<b>prev.Name</b>.<br>"
+                + "Variables and named cells/ranges must not use a sheet name or <b>prev</b> - the "
+                + "sheet name / reserved qualifier always wins.</html>";
     }
 }

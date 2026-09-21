@@ -68,6 +68,34 @@ public class SheetBook {
         return index >= 0 && index < visualOrder.size() ? visualOrder.get(index) : null;
     }
 
+    /**
+     * The live sheets in tab order: the visual order when one has been set,
+     * otherwise the slot order (which is also the tab order as long as tabs are
+     * never reordered). Closed (deleted) slots are skipped.
+     */
+    public List<Sheet> liveSheets() {
+        List<Sheet> order = new ArrayList<>();
+        List<Sheet> source = visualOrder.isEmpty() ? sheets : visualOrder;
+        for (Sheet s : source) {
+            if (s != null && !s.isClosed() && !order.contains(s)) {
+                order.add(s);
+            }
+        }
+        for (Sheet s : sheets) {   // a stale visual order may miss newer sheets
+            if (s != null && !s.isClosed() && !order.contains(s)) {
+                order.add(s);
+            }
+        }
+        return order;
+    }
+
+    /** The live sheet before {@code sheet} in tab order, or null when it is first. */
+    public Sheet previousSheet(Sheet sheet) {
+        List<Sheet> order = liveSheets();
+        int i = order.indexOf(sheet);
+        return i > 0 ? order.get(i - 1) : null;
+    }
+
     public Map<String, Cell> cellMap() {
         return cellMap;
     }
