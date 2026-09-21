@@ -110,8 +110,10 @@ public abstract class Node {
                 collectRefs(c, out);
             }
         } else if (n instanceof ArrayAccessNode aa) {
-            collectRefs(aa.getRowExpr(), out);
-            collectRefs(aa.getColExpr(), out);
+            if (aa.getRowExpr() != null) {   // null for the name[cellName] form
+                collectRefs(aa.getRowExpr(), out);
+                collectRefs(aa.getColExpr(), out);
+            }
         }
     }
 }

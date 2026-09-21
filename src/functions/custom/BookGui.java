@@ -165,11 +165,12 @@ public class BookGui {
         first.model.setSheetSize(3, 3);
         installRenderers(first);
         first.sheet.loadDefaults();
-        tabs.addTab("Sheet " + (book.size()), scrollFor(first));
+        tabs.addTab(first.sheet.name(), scrollFor(first));
         resizeRowNumberColumn(first.grid, 3);
 
         JPanel varsPanel = new JPanel(new BorderLayout());
         varsPanel.setBorder(BorderFactory.createTitledBorder("Variables (name = value, one per line)"));
+        varsArea.setToolTipText(namingHint());
         JScrollPane varsScroll = new JScrollPane(varsArea);
         varsScroll.setPreferredSize(new Dimension(600, 70));
         varsPanel.add(varsScroll, BorderLayout.CENTER);
@@ -621,7 +622,12 @@ public class BookGui {
         if (newName == null || newName.trim().isEmpty()) {
             return;
         }
-        v.sheet.setName(newName.trim());
+        try {
+            v.sheet.setName(newName.trim());
+        } catch (RuntimeException ex) {
+            showError(ex);
+            return;
+        }
         int index = tabs.getSelectedIndex();
         tabs.setTitleAt(index, v.sheet.name());
         setStatus("Sheet renamed: " + v.sheet.name());
@@ -770,7 +776,10 @@ public class BookGui {
             for (SheetView sv : sheets) {
                 sv.grid.repaint();
             }
-            setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed.");
+            setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed."
+                    + (v.sheet.ignoredVariableNames().isEmpty() ? ""
+                            : "  [ignored variable(s) " + v.sheet.ignoredVariableNames()
+                                    + ": the name is used by a sheet]"));
         } catch (Exception ex) {
             showError(ex);
         }
@@ -928,6 +937,15 @@ public class BookGui {
 
     private void setStatus(String text) {
         status.setText(text);
+    }
+
+    /** Tool tip explaining the naming rules shared by sheets, variables and names. */
+    private static String namingHint() {
+        return "<html>Reference a cell on another sheet as <b>Sheet[row, col]</b> (1-based), "
+                + "a cell of a named range as <b>Range[row, col]</b>, a named cell inside a range "
+                + "as <b>Range[cellName]</b>, or a named cell of a sheet as <b>Sheet[cellName]</b>.<br>"
+                + "Variables, variable arrays and named cells/ranges must not use a sheet name "
+                + "- a sheet name always wins.</html>";
     }
 
     /**
@@ -1164,12 +1182,15 @@ public class BookGui {
         return -1;
     }
 
-    /** The next free "Sheet N" name for a new sheet at the end of the display order. */
+    /**
+     * The next free "S N" name for a new sheet at the end of the display order.
+     * It is an identifier, so it can also be used in expressions.
+     */
     private String nextSheetName() {
         int n = tabs.getTabCount() + 1;
         String name;
         do {
-            name = "Sheet " + n;
+            name = "S" + n;
             n++;
         } while (sheetNameUsed(name));
         return name;
@@ -1226,7 +1247,8 @@ public class BookGui {
 
     /**
      * Asks for a file and saves the selected sheet on its own, in the same
-     * single-sheet format SheetGui writes (no book context).
+     * single-sheet format SheetGui writes (no book context). Also asks which
+     * workbook format version to write.
      */
     private void doSaveSheetAs() {
         SheetView v = current();
@@ -1241,14 +1263,19 @@ public class BookGui {
         if (fc.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
             return;
         }
-        saveSheetAs(fc.getSelectedFile().toPath());
+        int version = chooseSaveVersion();
+        if (version == 0) {
+            return;
+        }
+        saveSheetAs(fc.getSelectedFile().toPath(), version);
     }
 
     /**
      * Writes the selected sheet as a one-sheet workbook (a fresh one-sheet book
-     * is built from a copy of the sheet's content and serialized).
+     * is built from a copy of the sheet's content and serialized) in the given
+     * format version.
      */
-    private void saveSheetAs(Path target) {
+    private void saveSheetAs(Path target, int version) {
         SheetView v = current();
         if (v == null) {
             setStatus("There is no sheet to save.");
@@ -1260,9 +1287,10 @@ public class BookGui {
             copy.install(MathFunctions.createRegistry());
             copySheet(v.sheet, copy);
             String xml = WorkbookIO.toXml(single, varsArea.getText(), null, null,
-                    List.of(dataColumnWidths(v.grid)));
+                    List.of(dataColumnWidths(v.grid)), version);
             Files.writeString(target, xml);
-            setStatus("Sheet '" + v.sheet.name() + "' saved to " + target.getFileName());
+            setStatus("Sheet '" + v.sheet.name() + "' saved to " + target.getFileName()
+                    + " (v" + versionName(version) + ")");
         } catch (Exception ex) {
             showError(ex);
         }

@@ -370,7 +370,7 @@ public class BookAPI implements AutoCloseable {
      * Sets the referenced cells (on their sheets) to expressions (formulas) given
      * as raw source text, then recalculates the book. Formulas are parsed with
      * the owning sheet's registry, so {@code get(row,col)}, cross-sheet
-     * references ({@code s1.Name}, {@code S1(1,3)}) and every MathFunctions call
+     * references ({@code s1.Name}, {@code S1[1,3]}) and every MathFunctions call
      * work. An empty expression clears the cell.
      *
      * @return the cells whose values changed as a result of this batch (the set

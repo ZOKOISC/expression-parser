@@ -327,11 +327,21 @@ public class ExpressionParser {
                 }
                 if (peek().type == TokenType.LBRACKET) {
                     next();
-                    Node rowExpr = parseOr();
-                    expect(TokenType.COMMA);
-                    Node colExpr = parseOr();
+                    Node first = parseOr();
+                    if (peek().type == TokenType.COMMA) {
+                        next();
+                        Node colExpr = parseOr();
+                        expect(TokenType.RBRACKET);
+                        return new ArrayAccessNode(name, first, colExpr);
+                    }
                     expect(TokenType.RBRACKET);
-                    return new ArrayAccessNode(name, rowExpr, colExpr);
+                    // name[cellName]: the named cell cellName of the named range
+                    // (or of the sheet) called name.
+                    if (!(first instanceof VariableNode v)) {
+                        throw new ExpressionException(
+                                "Expected 'row,col' or a cell name inside '[...]'.");
+                    }
+                    return new ArrayAccessNode(name, v.getName());
                 }
                 return new VariableNode(name);
             }

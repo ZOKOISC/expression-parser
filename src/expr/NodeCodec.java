@@ -24,7 +24,11 @@ import java.util.List;
  */
 public final class NodeCodec {
 
-    /** Current binary layout version written at the head of the stream. */
+    /**
+     * Current binary layout version written at the head of the stream. The
+     * {@code name[cellName]} form uses a new {@link #ARRAYCELL} record kind, so
+     * streams written before it stay readable and this stays 1.
+     */
     public static final int FORMAT = 1;
 
     private static final int CONSTANT = 1;
@@ -35,6 +39,8 @@ public final class NodeCodec {
     private static final int FUNCTION = 6;
     private static final int IF = 7;
     private static final int ARRAYACCESS = 8;
+    /** {@code name[cellName]}: a named cell of a named range or of a sheet. */
+    private static final int ARRAYCELL = 9;
 
     /** Fixed data-type order so the index stays stable independent of the enum. */
     private static final DataType[] TYPES = {
@@ -134,6 +140,13 @@ public final class NodeCodec {
             write(out, i.getWhenTrue());
             write(out, i.getWhenFalse());
         } else if (n instanceof ArrayAccessNode a) {
+            if (a.getCellName() != null) {   // name[cellName]
+                out.write(ARRAYCELL);
+                out.write(typeIndex(n.getType()));
+                utf(out, a.getName());
+                utf(out, a.getCellName());
+                return;
+            }
             out.write(ARRAYACCESS);
             out.write(typeIndex(n.getType()));
             utf(out, a.getName());
@@ -239,6 +252,10 @@ public final class NodeCodec {
                 Node row = read(c);
                 Node col = read(c);
                 n = new ArrayAccessNode(name, row, col);
+            }
+            case ARRAYCELL -> {
+                String name = c.utf();
+                n = new ArrayAccessNode(name, c.utf());
             }
             default -> throw new ExpressionException("Unknown node kind: " + kind);
         }

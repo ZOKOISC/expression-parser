@@ -60,6 +60,10 @@ public class BookApiSample {
                     cell("S1", 1, 1), cell("S1", 1, 2), cell("S2", 1, 1))));
             check(value(api.getCellValues(List.of(cell("S1", 1, 1))), 1, 1, 1), 9.0, "S1!A1 = 9");
             check(value(api.getCellValues(List.of(cell("S2", 1, 1))), 2, 1, 1), 18.0, "S2!A1 = S1.Base*2 = 18");
+            check(value(api.getCellValues(List.of(cell("S1", 3, 1))), 1, 3, 1), 4.0,
+                    "S1!A3 = Block[Four] = 4 (named cell inside a range)");
+            check(value(api.getCellValues(List.of(cell("S2", 1, 2))), 2, 1, 2), 9.0,
+                    "S2!B1 = S1[Base] = 9 (named cell of a sheet)");
             List<BookAPI.CellResult> named = api.getCellValues(List.of(
                     BookAPI.CellAddress.named(BookAPI.SheetRef.ofName("S1"), "Base")));
             check(named.get(0).value(), 9.0, "S1 named cell 'Base' = 9");
@@ -72,17 +76,18 @@ public class BookApiSample {
                     cell("S1", 1, 1), DataType.NUMERIC, "20")));
             printResults("   changed: ", changed);
             check(findValue(changed, 2, 1, 1), 40.0, "S2!A1 recalculated on another sheet to 40");
+            check(findValue(changed, 2, 1, 2), 20.0, "S2!B1 = S1[Base] recalculated to 20");
 
             // d) set expressions on a third sheet, referencing S1 by name and by call
             System.out.println();
             System.out.println("=== 5. setCellExpressions on S3 ===");
             api.setCellExpressions(List.of(
                     new BookAPI.CellExpression(cell("S3", 1, 1), "S1.Base + 1"),
-                    new BookAPI.CellExpression(cell("S3", 2, 1), "S1(1,1) + 1")));
+                    new BookAPI.CellExpression(cell("S3", 2, 1), "S1[1,1] + 1")));
             List<BookAPI.CellResult> s3 = api.getCellValues(List.of(cell("S3", 1, 1), cell("S3", 2, 1)));
             printResults("   ", s3);
             check(value(s3, 3, 1, 1), 21.0, "S3!A1 = S1.Base + 1 = 21");
-            check(value(s3, 3, 2, 1), 21.0, "S3!A2 = S1(1,1) + 1 = 21");
+            check(value(s3, 3, 2, 1), 21.0, "S3!A2 = S1[1,1] + 1 = 21");
 
             // e) unknown sheet / name fail loudly
             try {
@@ -107,6 +112,8 @@ public class BookApiSample {
                         "reloaded S3!A1 = 21");
                 check(value(reloaded.getCellValues(List.of(cell("S2", 1, 1))), 2, 1, 1), 40.0,
                         "reloaded S2!A1 = 40");
+                check(value(reloaded.getCellValues(List.of(cell("S1", 3, 1))), 1, 3, 1), 4.0,
+                        "reloaded S1!A3 = Block[Four] = 4");
             }
 
             // h) close kills the API object
@@ -159,10 +166,18 @@ public class BookApiSample {
         s1.setRawValue(0, 2, "4");
         s1.setRawValue(0, 3, "5");
         s1.setRangeName(0, 2, 1, 3, "Block");     // B1:C2
+        s1.setCellName(0, 2, "Four");              // B1, inside Block
         // S2!A1 references the named cell on S1
         Node n = Expression.parse("S1.Base * 2", s2.registry()).getOptimized();
         s2.saveCell(0, 1, "", "S1.Base * 2", n, DataType.NUMERIC, n.collectReferenced(), null, null);
         s2.recomputeDependentsOnEdit(0, 1);
+        // S1!A3 = a named cell inside a range; S2!B1 = a named cell of a sheet
+        Node r = Expression.parse("Block[Four] + 0", s1.registry()).getOptimized();
+        s1.saveCell(2, 1, "", "Block[Four] + 0", r, DataType.NUMERIC, r.collectReferenced(), null, null);
+        s1.recomputeDependentsOnEdit(2, 1);
+        Node t = Expression.parse("S1[Base] + 0", s2.registry()).getOptimized();
+        s2.saveCell(0, 2, "", "S1[Base] + 0", t, DataType.NUMERIC, t.collectReferenced(), null, null);
+        s2.recomputeDependentsOnEdit(0, 2);
         Files.writeString(file, WorkbookIO.toXml(book, "x = 4"));
     }
 

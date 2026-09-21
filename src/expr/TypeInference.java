@@ -52,8 +52,10 @@ public final class TypeInference {
             applyVariableTypes(in.getWhenTrue(), vars);
             applyVariableTypes(in.getWhenFalse(), vars);
         } else if (n instanceof ArrayAccessNode aa) {
-            applyVariableTypes(aa.getRowExpr(), vars);
-            applyVariableTypes(aa.getColExpr(), vars);
+            if (aa.getRowExpr() != null) {   // null for the name[cellName] form
+                applyVariableTypes(aa.getRowExpr(), vars);
+                applyVariableTypes(aa.getColExpr(), vars);
+            }
         }
     }
 
@@ -67,6 +69,12 @@ public final class TypeInference {
             return t;
         }
         if (n instanceof ArrayAccessNode aa) {
+            if (aa.getCellName() != null) {
+                // name[cellName]: the type of the named cell, which is not known
+                // here - stay permissive.
+                aa.setType(DataType.ANY);
+                return DataType.ANY;
+            }
             DataType rt = inferNode(aa.getRowExpr(), vars, registry);
             DataType ct = inferNode(aa.getColExpr(), vars, registry);
             require(vars, aa.getRowExpr(), DataType.NUMERIC);

@@ -162,8 +162,10 @@ public class Expression {
                 collect(p, types);
             }
         } else if (n instanceof ArrayAccessNode aa) {
-            collect(aa.getRowExpr(), types);
-            collect(aa.getColExpr(), types);
+            if (aa.getRowExpr() != null) {   // null for the name[cellName] form
+                collect(aa.getRowExpr(), types);
+                collect(aa.getColExpr(), types);
+            }
         }
     }
 }

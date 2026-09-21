@@ -145,6 +145,7 @@ public class SheetGui {
 
         JPanel varsPanel = new JPanel(new BorderLayout());
         varsPanel.setBorder(BorderFactory.createTitledBorder("Variables (name = value, one per line)"));
+        varsArea.setToolTipText(namingHint());
         JScrollPane varsScroll = new JScrollPane(varsArea);
         varsScroll.setPreferredSize(new Dimension(600, 70));
         varsPanel.add(varsScroll, BorderLayout.CENTER);
@@ -700,7 +701,10 @@ public class SheetGui {
             v.sheet.setBindingsText(varsArea.getText());
             v.sheet.recomputeDependentsOnEdit(row, col);
             v.grid.repaint();
-            setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed.");
+            setStatus("Array cell (" + (row + 1) + "," + col + ") edited; dependents recomputed."
+                    + (v.sheet.ignoredVariableNames().isEmpty() ? ""
+                            : "  [ignored variable(s) " + v.sheet.ignoredVariableNames()
+                                    + ": the name is used by a sheet]"));
         } catch (Exception ex) {
             showError(ex);
         }
@@ -919,5 +923,14 @@ public class SheetGui {
 
     private void setStatus(String text) {
         status.setText(text);
+    }
+
+    /** Tool tip explaining the naming rules shared by sheets, variables and names. */
+    private static String namingHint() {
+        return "<html>Reference a cell on another sheet as <b>Sheet[row, col]</b> (1-based), "
+                + "a cell of a named range as <b>Range[row, col]</b>, a named cell inside a range "
+                + "as <b>Range[cellName]</b>, or a named cell of a sheet as <b>Sheet[cellName]</b>.<br>"
+                + "Variables, variable arrays and named cells/ranges must not use a sheet name "
+                + "- a sheet name always wins.</html>";
     }
 }

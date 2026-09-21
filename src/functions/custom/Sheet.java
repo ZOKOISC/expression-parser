@@ -12,6 +12,7 @@ import java.util.Set;
 import expr.CellRef;
 import expr.CellRect;
 import expr.RangeValue;
+import expr.SheetSlot;
 import expr.ArrayAccessNode;
 import expr.BinaryNode;
 import expr.ConstantNode;
@@ -45,6 +46,10 @@ public class Sheet implements CellProvider {
     private final Set<String> injectedSheetNameBindings = new LinkedHashSet<>();
     /** Keys of the cross-sheet bindings injected by {@link #refreshCrossSheetBindings()}. */
     private final Set<String> injectedCrossSheetBindings = new LinkedHashSet<>();
+    /** User variable names of the current variables text (sheet names excluded). */
+    private final Set<String> variableNames = new LinkedHashSet<>();
+    /** Variable names ignored because a sheet of the workbook uses them. */
+    private final Set<String> ignoredVariableNames = new LinkedHashSet<>();
     private int activeRow = 0;
     private int activeCol = 0;
 
@@ -83,13 +88,56 @@ public class Sheet implements CellProvider {
     }
 
     public String name() {
-        return name == null || name.isEmpty() ? "Sheet " + (sheetIndex() + 1) : name;
+        return name == null || name.isEmpty() ? "S" + (sheetIndex() + 1) : name;
     }
 
     public void setName(String name) {
-        this.name = name == null ? "" : name.trim();
+        String newName = name == null ? "" : name.trim();
+        if (!newName.isEmpty() && book != null) {
+            String clash = nameClash(newName);
+            if (clash != null) {
+                throw new IllegalArgumentException("Sheet name '" + newName
+                        + "' is already used as " + clash + "; a sheet name must not collide with a "
+                        + "variable, variable array or named cell/range.");
+            }
+        }
+        this.name = newName;
         if (book != null) {
             book.refreshAllSheetNameBindings();
+        }
+    }
+
+    /** The kind of non-sheet thing already using {@code name} anywhere, or null. */
+    private String nameClash(String name) {
+        for (int slot = 1; slot <= book.maxSlot(); slot++) {
+            Sheet s = book.get(slot - 1);
+            if (s == null) {
+                continue;
+            }
+            if (s.variableNames.contains(name)) {
+                return "a variable";
+            }
+            if (s.namedRefs.containsKey(name)) {
+                return "a named cell";
+            }
+            if (s.namedRanges.containsKey(name)) {
+                return "a named cell-range";
+            }
+        }
+        return null;
+    }
+
+    /** Rejects a cell/range name that a sheet of the workbook already uses. */
+    private void requireNotSheetName(String name) {
+        if (book == null) {
+            return;
+        }
+        for (int slot = 1; slot <= book.maxSlot(); slot++) {
+            Sheet s = book.get(slot - 1);
+            if (s != null && name.equals(s.name())) {
+                throw new IllegalArgumentException("Name '" + name
+                        + "' is already used as a sheet name; a name must not collide with a sheet name.");
+            }
         }
     }
 
@@ -155,19 +203,62 @@ public class Sheet implements CellProvider {
 
     public void setBindingsText(String text) {
         bindings.clear();
-        bindings.putAll(parseBindings(text));
-        refreshSheetNameBindings();
+        variableNames.clear();
+        ignoredVariableNames.clear();
+        for (Map.Entry<String, Object> e : parseBindings(text).entrySet()) {
+            // A user variable must not shadow a sheet name: the sheet name wins,
+            // so a colliding definition is ignored (and reported).
+            if (isSheetName(e.getKey())) {
+                ignoredVariableNames.add(e.getKey());
+                continue;
+            }
+            variableNames.add(e.getKey());
+            bindings.put(e.getKey(), e.getValue());
+        }
+        refreshNamedRefBindings();
+    }
+
+    /** True when a sheet of the workbook is named {@code name}. */
+    public boolean isSheetName(String name) {
+        if (book == null || name == null) {
+            return false;
+        }
+        for (int slot = 1; slot <= book.maxSlot(); slot++) {
+            Sheet candidate = book.get(slot - 1);
+            if (candidate != null && name.equals(candidate.name())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The user-defined variable names of the current variables text. */
+    public Set<String> variableNames() {
+        return new LinkedHashSet<>(variableNames);
+    }
+
+    /** Variable names ignored because a sheet of the workbook uses them. */
+    public Set<String> ignoredVariableNames() {
+        return new LinkedHashSet<>(ignoredVariableNames);
+    }
+
+    /**
+     * Refreshes the workbook's sheet-name bindings: every sheet name is bound to
+     * its 1-based slot id (a {@link expr.SheetSlot}), so {@code get(Budget, 1, 4)}
+     * and {@code Budget[1,4]} can reference a sheet by name. The sheet name wins
+     * over a user variable array or named range of the same name.
+     */
+    public void refreshSheetNameBindings() {
         refreshNamedRefBindings();
     }
 
     /**
-     * Injects the workbook's sheet names as bindings mapping each name to its
-     * 1-based slot id, so expressions can reference a sheet by name, e.g.
-     * {@code get(Budget, 1, 4)}. The sheet-name binding wins over a user
-     * variable of the same name (it is added last). Injected keys are tracked
-     * so renames and removals never leave a stale name -> slot entry behind.
+     * Injects the sheet names as the last bindings, so a sheet name always wins
+     * over a user variable array or a named range that uses the same name.
+     * Injected keys are tracked so a rename or removal never leaves a stale
+     * name-to-slot entry behind.
      */
-    public void refreshSheetNameBindings() {
+    private void injectSheetNames() {
         for (String key : injectedSheetNameBindings) {
             bindings.remove(key);
         }
@@ -184,10 +275,9 @@ public class Sheet implements CellProvider {
             if (sheetName == null || sheetName.isEmpty()) {
                 continue;
             }
-            bindings.put(sheetName, (double) slot);
+            bindings.put(sheetName, new SheetSlot(slot, candidate.namedRefs));
             injectedSheetNameBindings.add(sheetName);
         }
-        refreshNamedRefBindings();
     }
 
     // ------------------------------------------------- named cell references
@@ -298,6 +388,7 @@ public class Sheet implements CellProvider {
             throw new IllegalArgumentException("Cell name '" + nm
                     + "' must be an identifier (letters, digits or underscore, starting with a letter or underscore).");
         }
+        requireNotSheetName(nm);
         namedRanges.remove(nm);             // a name belongs to one cell or one range
         CellRef currentOwner = namedRefs.get(nm);
         if (currentOwner != null && !currentOwner.equals(target)) {
@@ -327,6 +418,7 @@ public class Sheet implements CellProvider {
             throw new IllegalArgumentException("Range name '" + nm
                     + "' must be an identifier (letters, digits or underscore, starting with a letter or underscore).");
         }
+        requireNotSheetName(nm);
         namedRefs.remove(nm);               // a name belongs to one cell or one range
         CellRect currentOwner = namedRanges.get(nm);
         if (currentOwner != null && !currentOwner.equals(target)) {
@@ -360,6 +452,7 @@ public class Sheet implements CellProvider {
             bindings.put(e.getKey(), new RangeBinding(rect));
         }
         refreshCrossSheetBindings();
+        injectSheetNames();   // sheet names always win over a same-named range/variable
     }
 
     /**
@@ -486,6 +579,16 @@ public class Sheet implements CellProvider {
             }
             Cell c = cell(r, gcol);
             return c == null || c.isEmpty() ? null : c.getValue();
+        }
+
+        @Override
+        public Map<String, CellRef> namedCells() {
+            return namedRefs;   // this range's sheet, so rangeName[cellName] can resolve
+        }
+
+        @Override
+        public boolean contains(CellRef ref) {
+            return rect.contains(ref);
         }
     }
 
@@ -761,39 +864,87 @@ public class Sheet implements CellProvider {
     }
 
     /**
-     * Adds the CellRef behind a {@code "<sheetName>(row, col)"} call - a
-     * function call named after a sheet - when both arguments are numeric
-     * constants, so editing the referenced cell recalculates the formula. Row
-     * and column are 1-based.
+     * Adds the CellRef behind a {@code "<sheetName>(row, col)"} call - the
+     * older function-call spelling of a sheet-cell reference - when both
+     * arguments are numeric constants, so editing the referenced cell
+     * recalculates the formula. Row and column are 1-based. New formulas should
+     * use {@code "<sheetName>[row, col]"} instead.
      */
     private void addSheetCallRef(FunctionNode f, Set<CellRef> out) {
-        if (book == null || f.getParams().size() != 2) {
-            return;
+        if (f.getParams().size() == 2) {
+            addSheetCellRef(f.getName(), f.getParams().get(0), f.getParams().get(1), out);
         }
-        Sheet target = sheetByName(f.getName());
+    }
+
+    /**
+     * Adds the single cell a {@code Sheet[row,col]} (or {@code Sheet(row,col)})
+     * reference points at, when the sheet name matches and both indices are
+     * numeric constants. Returns true when a reference was added.
+     */
+    private boolean addSheetCellRef(String sheetName, Node rowNode, Node colNode, Set<CellRef> out) {
+        if (book == null) {
+            return false;
+        }
+        Sheet target = sheetByName(sheetName);
         if (target == null) {
-            return;
+            return false;
         }
-        Node rowNode = f.getParams().get(0);
-        Node colNode = f.getParams().get(1);
         if (!(rowNode instanceof ConstantNode r) || !(colNode instanceof ConstantNode c)
                 || r.getType() != DataType.NUMERIC || c.getType() != DataType.NUMERIC) {
-            return;
+            return false;   // dynamic indices cannot be resolved while saving
         }
         double rv = r.numericValue();
         double cv = c.numericValue();
         if (Math.floor(rv) != rv || Math.floor(cv) != cv) {
-            return;
+            return false;
         }
         out.add(new CellRef(target.sheetIndex(), (int) rv - 1, (int) cv - 1));
+        return true;
+    }
+
+    /**
+     * Adds the CellRef behind a {@code "name[cellName]"} reference, i.e. the named
+     * cell {@code cellName}. When {@code qualifier} names a sheet, the cell must
+     * be defined on that sheet; otherwise {@code qualifier} is a named range and
+     * the cell must lie inside it. Returns true when a reference was added.
+     */
+    private boolean addNamedCellRef(String qualifier, String cellName, Set<CellRef> out) {
+        if (book == null) {
+            return false;
+        }
+        String cell = cellName;
+        int dot = cell.indexOf('.');
+        if (dot >= 0 && dot < cell.length() - 1) {
+            cell = cell.substring(dot + 1);    // "name[Sheet.Cell]" keeps the cell part
+        }
+        Sheet target = sheetByName(qualifier);
+        if (target != null) {
+            CellRef ref = target.namedRefs().get(cell);
+            if (ref == null) {
+                return false;
+            }
+            out.add(ref.normalize(target.sheetIndex()));
+            return true;
+        }
+        CellRect rect = resolveRange(qualifier);
+        if (rect == null) {
+            return false;
+        }
+        CellRef ref = namedRefs.get(cell);
+        if (ref == null || !rect.contains(ref.normalize(sheetIndex()))) {
+            return false;
+        }
+        out.add(ref.normalize(sheetIndex()));
+        return true;
     }
 
     /**
      * Adds the CellRefs behind every named cell reference used in the node tree:
      * {@code get('Name')} calls, bare {@code Name} variables, cross-sheet
-     * {@code sheet.Name} references and {@code sheetName(row, col)} calls. The
-     * referenced cell is then tracked as a dependent so editing it recalculates
-     * the formula.
+     * {@code sheet.Name} references, named ranges and sheet-cell references
+     * ({@code sheetName[row, col]}, or the older {@code sheetName(row, col)}
+     * call). The referenced cell is then tracked as a dependent so editing it
+     * recalculates the formula.
      */
     private void addNamedRefs(Node n, Set<CellRef> out) {
         if (n == null) {
@@ -827,9 +978,15 @@ public class Sheet implements CellProvider {
                 addNamedRefs(c, out);
             }
         } else if (n instanceof ArrayAccessNode aa) {
-            addRangeCells(resolveRange(aa.getName()), out);
-            addNamedRefs(aa.getRowExpr(), out);
-            addNamedRefs(aa.getColExpr(), out);
+            if (aa.getCellName() != null) {
+                addNamedCellRef(aa.getName(), aa.getCellName(), out);
+            } else if (!addSheetCellRef(aa.getName(), aa.getRowExpr(), aa.getColExpr(), out)) {
+                addRangeCells(resolveRange(aa.getName()), out);
+            }
+            if (aa.getRowExpr() != null) {
+                addNamedRefs(aa.getRowExpr(), out);
+                addNamedRefs(aa.getColExpr(), out);
+            }
         } else if (n instanceof VariableNode v) {
             CellRef ref = namedRefs.get(v.getName());
             if (ref == null) {
