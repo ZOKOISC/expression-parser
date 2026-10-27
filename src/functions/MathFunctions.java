@@ -12,6 +12,7 @@ import expr.ExpressionException;
 import expr.Node;
 import functions.custom.GrossFunction;
 import functions.custom.NetFunction;
+import functions.custom.SumFunction;
 import functions.custom.TaxFunction;
 
 public final class MathFunctions {
@@ -42,20 +43,16 @@ public final class MathFunctions {
                 p -> EvalUtil.asString(p.get(0)).toLowerCase()));
         reg.register(new SimpleFunction("trim", DataType.STRING, new DataType[] { DataType.STRING },
                 p -> EvalUtil.asString(p.get(0)).trim()));
-        reg.register(new SimpleFunction("substring", DataType.STRING,
-                new DataType[] { DataType.STRING, DataType.NUMERIC, DataType.NUMERIC },
-                p -> {
-                    String s = EvalUtil.asString(p.get(0));
-                    int from = (int) EvalUtil.asDouble(p.get(1));
-                    int to = (int) EvalUtil.asDouble(p.get(2));
-                    return s.substring(Math.max(0, from), Math.min(s.length(), to));
-                }));
+        reg.register(substringFunction());
         reg.register(new SimpleFunction("toString", DataType.STRING,
                 new DataType[] { DataType.ANY },
                 p -> EvalUtil.asString(p.get(0))));
         reg.register(new SimpleFunction("concat", DataType.STRING,
                 new DataType[] { DataType.ANY, DataType.ANY },
                 p -> EvalUtil.asString(p.get(0)) + EvalUtil.asString(p.get(1))));
+        reg.register(new SimpleFunction("numVal", DataType.NUMERIC,
+                new DataType[] { DataType.STRING },
+                p -> numVal(EvalUtil.asString(p.get(0)))));
 
         reg.register(dateArith("addYears",
                 LocalDate::plusYears, LocalDateTime::plusYears));
@@ -73,8 +70,81 @@ public final class MathFunctions {
         reg.register(new TaxFunction());
         reg.register(new NetFunction());
         reg.register(new GrossFunction());
+        reg.register(new SumFunction());
 
         return reg;
+    }
+
+    /**
+     * {@code substring(s, begin)} / {@code substring(s, begin, end)} - 0-based
+     * begin index, exclusive end index, both clamped to the string's bounds so an
+     * out-of-range index never throws.
+     */
+    private static Function substringFunction() {
+        return new Function() {
+            @Override
+            public String getName() {
+                return "substring";
+            }
+
+            @Override
+            public DataType getReturnType() {
+                return DataType.STRING;
+            }
+
+            @Override
+            public DataType[] getParameterTypes() {
+                return new DataType[] { DataType.STRING, DataType.NUMERIC, DataType.NUMERIC };
+            }
+
+            @Override
+            public boolean acceptsParameterCount(int count) {
+                return count == 2 || count == 3;
+            }
+
+            @Override
+            public String parameterCountDescription() {
+                return "2 or 3 parameter(s)";
+            }
+
+            @Override
+            public Object evaluate(List<Object> params) {
+                String s = EvalUtil.asString(params.get(0));
+                int begin = clamp((int) EvalUtil.asDouble(params.get(1)), 0, s.length());
+                if (params.size() == 2) {
+                    return s.substring(begin);
+                }
+                int end = clamp((int) EvalUtil.asDouble(params.get(2)), begin, s.length());
+                return s.substring(begin, end);
+            }
+        };
+    }
+
+    private static int clamp(int value, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, value));
+    }
+
+    /**
+     * {@code numVal(text)} - the numeric value of a numeric string. Space and
+     * non-breaking-space thousands separators are ignored; a decimal point is
+     * accepted. A non-numeric string raises an error.
+     */
+    private static Object numVal(String text) {
+        if (text == null) {
+            return null;
+        }
+        String t = text.trim()
+                .replace("\u00A0", "")     // no-break space
+                .replace("\u202F", "")     // narrow no-break space
+                .replace(" ", "");
+        if (t.isEmpty()) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(t);
+        } catch (NumberFormatException ex) {
+            throw new ExpressionException("numVal: '" + text + "' is not a numeric string.");
+        }
     }
 
     private static Function toDateTimeFunction() {

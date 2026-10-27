@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import javax.swing.BorderFactory;
 import javax.swing.border.Border;
@@ -58,6 +59,7 @@ import expr.CellRect;
 import expr.CellRef;
 import expr.ConstantNode;
 import expr.DataType;
+import expr.EvalUtil;
 import expr.Expression;
 import expr.Node;
 import functions.MathFunctions;
@@ -88,19 +90,42 @@ public class BookGui {
     private SheetBook book = new SheetBook();
     private final JTabbedPane tabs = new JTabbedPane();
     private final JLabel typeLabel = new JLabel(" ");
+    private final JLabel periodLabel = new JLabel(" ");
     private JFrame frame;
+    /** A copied single cell (raw text, expression, datatype, format, alignment). */
+    private CopiedCell copiedCell;
+    /** A copied row: one captured cell per data column. */
+    private java.util.List<CopiedCell> copiedRow;
+    /** A copied sheet presentation (Format copy / Format paste). */
+    private SheetPresentation copiedPresentation;
+    /** The source cell of a pending "Move from" / "Move to" operation, or null. */
+    private int[] moveFrom;
     /** Folder the current workbook was loaded from (save dialog starts here). */
     private File currentDir;
     /** XML file the workbook was loaded from, or the last file it was saved to. */
     private Path currentFile;
     /** Workbook format version used by the last save/load (default v1.0). */
     private int saveVersion = WorkbookIO.VERSION_1;
+    /** Notified after the workbook is successfully written to disk (may be null). */
+    private Runnable saveListener;
+    /** Notified after a cell edit is committed and its dependents recalculated (may be null). */
+    private Runnable cellEditListener;
     /** Tab being dragged when reordering sheets; -1 when idle. */
     private int dragFrom = -1;
     /** Tab index currently held by the drag-to-reorder gesture, or -1. */
     private int dragTab = -1;
+    /** Pending "click the selected cell again to edit it" gesture. */
+    private javax.swing.Timer gridEditTimer;
+    /** The cell of the previous single click (the first of two), or (-1,-1). */
+    private int lastClickRow = -1;
+    private int lastClickCol = -1;
+    /** Whether the File menu (New/Save/Save As/Open XML) is shown. */
+    private boolean showFileMenu = true;
+    /** The graph box's short name, shown in the cell editor title; null outside a graph. */
+    private String contextBoxName;
 
     public static void main(String[] args) {
+        apps.payroll.PayrollApplication.install();   // bundled payroll application module
         SwingUtilities.invokeLater(BookGui::new);
     }
 
@@ -124,7 +149,18 @@ public class BookGui {
     private String bookName = "BookGui";
 
     public BookGui(File openFile, boolean exitOnClose, String windowTitle) {
+        this(openFile, exitOnClose, windowTitle, true);
+    }
+
+    /**
+     * Full constructor. When {@code showFileMenu} is false the File menu is not
+     * shown - used when the editor is embedded in the graph, where the box
+     * right-click menu handles book import/export.
+     */
+    public BookGui(File openFile, boolean exitOnClose, String windowTitle, boolean showFileMenu) {
+        this.showFileMenu = showFileMenu;
         this.bookName = windowTitle == null ? "BookGui" : windowTitle;
+        expr.EvalUtil.setDecimalMode(graph.GraphConfig.decimalMode());
         buildUi();
         confirmOnClose(exitOnClose);
         if (openFile != null && openFile.exists()) {
@@ -133,6 +169,14 @@ public class BookGui {
             Path remembered = Shelf.rememberedShelfFolder();
             currentDir = remembered != null ? remembered.toFile() : null;
         }
+    }
+
+    /**
+     * Sets the graph box's short name so the cell editor titles show it, e.g.
+     * {@code "SRC / S1 - Cell: 2, 3"}. Pass null to clear.
+     */
+    public void setContextBoxName(String name) {
+        this.contextBoxName = name == null || name.isBlank() ? null : name;
     }
 
     /**
@@ -172,12 +216,8 @@ public class BookGui {
         tabs.addTab(first.sheet.name(), scrollFor(first));
         resizeRowNumberColumn(first.grid, 3);
 
-        JPanel varsPanel = new JPanel(new BorderLayout());
-        varsPanel.setBorder(BorderFactory.createTitledBorder("Variables (name = value, one per line)"));
+        // The variables live in a Settings dialog, not in an always-visible area.
         varsArea.setToolTipText(namingHint());
-        JScrollPane varsScroll = new JScrollPane(varsArea);
-        varsScroll.setPreferredSize(new Dimension(600, 70));
-        varsPanel.add(varsScroll, BorderLayout.CENTER);
 
         JPanel arrayControls = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         arrayControls.add(new JLabel("Grid size: rows"));
@@ -195,6 +235,9 @@ public class BookGui {
         arrayControls.add(btnCreateSheet);
         typeLabel.setFont(mono);
         arrayControls.add(typeLabel);
+        periodLabel.setFont(mono);
+        arrayControls.add(new JLabel("   "));
+        arrayControls.add(periodLabel);
 
         JMenuBar menuBar = new JMenuBar();
         JMenu fileMenu = new JMenu("File");
@@ -213,7 +256,16 @@ public class BookGui {
         fileMenu.add(itemSaveAs);
         fileMenu.addSeparator();
         fileMenu.add(itemOpen);
-        menuBar.add(fileMenu);
+        if (showFileMenu) {
+            menuBar.add(fileMenu);
+        }
+        JMenu settingsMenu = new JMenu("Settings");
+        JMenuItem itemVariables = new JMenuItem("Variables...");
+        itemVariables.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_M, InputEvent.CTRL_DOWN_MASK));
+        itemVariables.setToolTipText("Edit the variables (name = value) of the workbook");
+        itemVariables.addActionListener(e -> editVariables());
+        settingsMenu.add(itemVariables);
+        menuBar.add(settingsMenu);
         itemNew.addActionListener(e -> doNewBook());
         itemSave.addActionListener(e -> doSaveXml());
         itemSaveAs.addActionListener(e -> doSaveXmlAs());
@@ -285,7 +337,6 @@ public class BookGui {
         frame.setJMenuBar(menuBar);
         frame.setLayout(new BorderLayout());
         JPanel north = new JPanel(new BorderLayout());
-        north.add(varsPanel, BorderLayout.CENTER);
         north.add(arrayControls, BorderLayout.SOUTH);
         frame.add(north, BorderLayout.NORTH);
         frame.add(tabs, BorderLayout.CENTER);
@@ -326,13 +377,37 @@ public class BookGui {
         v.grid.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
+                if (e.getButton() == MouseEvent.BUTTON1 && e.getClickCount() >= 2 && !e.isPopupTrigger()) {
+                    cancelGridEditTimer();
+                    lastClickRow = -1;
+                    lastClickCol = -1;
+                    int row = v.grid.rowAtPoint(e.getPoint());
+                    int col = v.grid.columnAtPoint(e.getPoint());
+                    if (row >= 0 && col > 0 && row < v.sheet.rows() && col <= v.sheet.cols()) {
+                        final int r = row;
+                        final int c = col;
+                        if (v.grid.isEditing()) {
+                            v.grid.getCellEditor().cancelCellEditing();
+                        }
+                        SwingUtilities.invokeLater(() -> {
+                            if (v.grid.isEditing()) {
+                                v.grid.getCellEditor().cancelCellEditing();
+                            }
+                            showEditDialog(v, r, c, v.sheet.cell(r, c));
+                        });
+                        return;
+                    }
+                }
                 if (e.isPopupTrigger()) {
-                    showCellMenu(v, e);
+                    showGridPopup(v, e);
                 } else if (e.getButton() == MouseEvent.BUTTON1) {
                     int row = v.grid.rowAtPoint(e.getPoint());
                     int col = v.grid.columnAtPoint(e.getPoint());
                     if (row >= 0 && row < v.sheet.rows() && col >= 0 && col <= v.sheet.cols()) {
+                        boolean sameCell = col > 0 && row == lastClickRow && col == lastClickCol;
                         if (col == 0) {
+                            lastClickRow = -1;
+                            lastClickCol = -1;
                             v.dragAnchorRow = -1;   // whole-row select: no drag range
                             selectWholeRow(v, row);
                         } else {
@@ -343,6 +418,19 @@ public class BookGui {
                             } else {
                                 v.dragAnchorRow = -1;
                             }
+                            // Only a second single click on the same cell starts
+                            // in-place editing; a single click just selects.
+                            if (sameCell && e.getClickCount() == 1
+                                    && !e.isControlDown() && !e.isShiftDown()
+                                    && !v.grid.isEditing()
+                                    && v.grid.isCellEditable(row, col)) {
+                                scheduleGridEdit(v, row, col);
+                                lastClickRow = -1;
+                                lastClickCol = -1;
+                            } else {
+                                lastClickRow = row;
+                                lastClickCol = col;
+                            }
                         }
                     }
                 }
@@ -350,21 +438,10 @@ public class BookGui {
 
             @Override
             public void mouseReleased(MouseEvent e) {
-                if (e.isPopupTrigger()) showCellMenu(v, e);
+                if (e.isPopupTrigger()) showGridPopup(v, e);
                 if (e.getButton() == MouseEvent.BUTTON1) {
                     v.dragAnchorRow = -1;
                     v.dragAnchorCol = -1;
-                }
-            }
-
-            @Override
-            public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() >= 2 && e.getButton() == MouseEvent.BUTTON1 && !e.isPopupTrigger()) {
-                    int row = v.grid.rowAtPoint(e.getPoint());
-                    int col = v.grid.columnAtPoint(e.getPoint());
-                    if (row >= 0 && col > 0 && row < v.sheet.rows() && col <= v.sheet.cols()) {
-                        showEditDialog(v, row, col, v.sheet.cell(row, col));
-                    }
                 }
             }
         });
@@ -372,6 +449,9 @@ public class BookGui {
         v.grid.addMouseMotionListener(new MouseAdapter() {
             @Override
             public void mouseDragged(MouseEvent e) {
+                cancelGridEditTimer();
+                lastClickRow = -1;
+                lastClickCol = -1;
                 if (v.dragAnchorRow < 0
                         || (e.getModifiersEx() & MouseEvent.BUTTON1_DOWN_MASK) == 0) {
                     return;
@@ -403,7 +483,21 @@ public class BookGui {
             }
         });
         sheets.add(v);
+        syncVisualOrder();
         return v;
+    }
+
+    /**
+     * Keeps the book's visual (tab) order in sync with the displayed sheet order,
+     * so relative references such as {@code prev[...]} follow the tab order the
+     * user sees.
+     */
+    private void syncVisualOrder() {
+        List<Sheet> order = new ArrayList<>();
+        for (SheetView v : sheets) {
+            order.add(v.sheet);
+        }
+        book.setVisualOrder(order);
     }
 
     /** Clicking a data cell selects just that cell (JTable defaults to rows). */
@@ -442,136 +536,13 @@ public class BookGui {
     }
 
     /** Background tint of cells that carry an expression (a formula). */
-    private static final Color FORMULA_TINT = Color.LIGHT_GRAY;
+    private static final Color FORMULA_TINT = SheetCellRenderer.FORMULA_TINT;
 
-    private static class FormatCellRenderer extends DefaultTableCellRenderer {
-        private final SheetView view;
-
-        FormatCellRenderer(SheetView view) {
-            this.view = view;
-        }
-
-        @Override
-        public java.awt.Component getTableCellRendererComponent(JTable table, Object value,
-                boolean isSelected, boolean hasFocus, int row, int column) {
-            super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
-            Cell cell = column > 0 ? view.sheet.cell(row, column) : null;
-            if (cell != null) {
-                String pat = cell.getFormatPattern();
-                Object val = cell.getValue();
-                if (pat != null && !pat.isEmpty()) {
-                    try {
-                        if (val instanceof LocalDate d) {
-                            setText(d.format(DateTimeFormatter.ofPattern(pat)));
-                        } else if (val instanceof LocalDateTime dt) {
-                            setText(dt.format(DateTimeFormatter.ofPattern(pat)));
-                        } else if (val instanceof LocalTime t) {
-                            setText(t.format(DateTimeFormatter.ofPattern(pat)));
-                        } else if (val instanceof Number n) {
-                            setText(Cell.formatNumber(pat, n));
-                        }
-                    } catch (Exception ignored) {
-                        // pattern not applicable; keep default label text
-                    }
-                }
-                String al = cell.getHorizontalAlignment();
-                int swingAlign;
-                if (al != null) {
-                    if ("Right".equalsIgnoreCase(al)) {
-                        swingAlign = SwingConstants.RIGHT;
-                    } else if ("Center".equalsIgnoreCase(al)) {
-                        swingAlign = SwingConstants.CENTER;
-                    } else {
-                        swingAlign = SwingConstants.LEFT;
-                    }
-                } else {
-                    DataType dt = cell.getType();
-                    if (dt == DataType.NUMERIC) {
-                        swingAlign = SwingConstants.RIGHT;
-                    } else if (dt == DataType.STRING) {
-                        swingAlign = SwingConstants.LEFT;
-                    } else {
-                        swingAlign = SwingConstants.CENTER;
-                    }
-                }
-                setHorizontalAlignment(swingAlign);
-                padAlignedSide(swingAlign);
-            } else {
-                setHorizontalAlignment(SwingConstants.CENTER);
-            }
-            // Presentation: the cell's own background/caption colours and caption
-            // font. A selected cell keeps the selection colours so the selection
-            // stays visible; a formula cell defaults to the tint.
-            CellStyle style = cell == null ? null : view.sheet.getStyle(row, column);
-            Color background = null;
-            if (style != null && style.background != null) {
-                background = CellStyle.toColor(style.background);
-            } else if (cell != null && cell.hasFormula()) {
-                background = FORMULA_TINT;
-            }
-            if (isSelected) {
-                setBackground(table.getSelectionBackground());
-                setForeground(table.getSelectionForeground());
-            } else {
-                setBackground(background != null ? background : table.getBackground());
-                setForeground(style != null && style.foreground != null
-                        ? CellStyle.toColor(style.foreground) : table.getForeground());
-            }
-            setFont(style == null ? table.getFont() : captionFont(table, style));
-            return this;
-        }
-
-        /** The table's font with the style's family/size/weight and decorations. */
-        private static Font captionFont(JTable table, CellStyle style) {
-            Font base = table.getFont();
-            int flags = (style.bold ? Font.BOLD : 0) | (style.italic ? Font.ITALIC : 0);
-            Font font = base;
-            if (style.fontFamily != null || style.fontSize != null) {
-                font = new Font(style.fontFamily != null ? style.fontFamily : base.getFamily(), flags,
-                        style.fontSize != null ? style.fontSize : base.getSize());
-            } else if (flags != 0) {
-                font = base.deriveFont(flags);
-            }
-            if (style.underline || style.strike) {
-                Map<TextAttribute, Object> attributes = new HashMap<>();
-                if (style.underline) {
-                    attributes.put(TextAttribute.UNDERLINE, TextAttribute.UNDERLINE_ON);
-                }
-                if (style.strike) {
-                    attributes.put(TextAttribute.STRIKETHROUGH, TextAttribute.STRIKETHROUGH_ON);
-                }
-                font = font.deriveFont(attributes);
-            }
-            return font;
-        }
-
-        /**
-         * Adds a one-character inset on the aligned side - from the left for
-         * left-aligned values, from the right for right-aligned values - on top
-         * of the renderer's default cell border, so the text is not flush with
-         * the cell edge. Centered/other cells keep the default border.
-         */
-        private void padAlignedSide(int align) {
-            if (align != SwingConstants.LEFT && align != SwingConstants.RIGHT) {
-                return;
-            }
-            int pad = getFontMetrics(getFont()).charWidth('0');
-            Border base = getBorder();
-            Insets ins = base == null ? new Insets(1, 1, 1, 1) : base.getBorderInsets(this);
-            if (align == SwingConstants.RIGHT) {
-                setBorder(BorderFactory.createEmptyBorder(ins.top, ins.left, ins.bottom, ins.right + pad));
-            } else {
-                setBorder(BorderFactory.createEmptyBorder(ins.top, ins.left + pad, ins.bottom, ins.right));
-            }
-        }
+    private static class FormatCellRendererUnused {
     }
 
     private static void installRenderers(SheetView v) {
-        FormatCellRenderer renderer = new FormatCellRenderer(v);
-        v.grid.setDefaultRenderer(Object.class, renderer);
-        for (int i = 1; i <= v.sheet.cols(); i++) {
-            v.grid.getColumnModel().getColumn(i).setCellRenderer(renderer);
-        }
+        SheetCellRenderer.install(v.grid, () -> v.sheet);
     }
 
     private void doCreateSheet() {
@@ -592,6 +563,7 @@ public class BookGui {
         resizeRowNumberColumn(v.grid, rows);
         tabs.addTab(v.sheet.name(), scrollFor(v));
         tabs.setSelectedIndex(tabs.getTabCount() - 1);
+        refreshTabTooltips();
         updateGridSizeFields();
         setStatus("Sheet created: " + v.sheet.name() + " (" + rows + "x" + cols + ").");
     }
@@ -620,6 +592,7 @@ public class BookGui {
         if (bookIndex >= 0) {
             book.remove(bookIndex);
         }
+        syncVisualOrder();
         recomputeAllSheets();   // the tab order changed: prev may now mean another sheet
         updateGridSizeFields();
         setStatus("Sheet deleted.");
@@ -634,6 +607,118 @@ public class BookGui {
             sv.sheet.recomputeAll();
             sv.grid.repaint();
         }
+    }
+
+    /** Recalculates only the expressions on the currently selected sheet. */
+    private void recalcCurrentSheet() {
+        SheetView v = current();
+        if (v == null) {
+            setStatus("There is no sheet to recalculate.");
+            return;
+        }
+        runBusy("Recalculating...", () -> {
+            v.sheet.recomputeAll();
+            v.grid.repaint();
+        });
+        setStatus("Recalculated sheet '" + v.sheet.name() + "'.");
+    }
+
+    /**
+     * Opens the variables editor (Settings &gt; Variables...) and applies the edited
+     * variables to every sheet of the workbook, then recalculates.
+     */
+    private void editVariables() {
+        String edited = VariablesDialog.edit(frame, "Variables", varsArea.getText());
+        if (edited == null) {
+            return;
+        }
+        varsArea.setText(edited);
+        for (SheetView v : sheets) {
+            v.sheet.setBindingsText(edited);
+        }
+        runBusy("Recalculating...", this::recomputeAllSheets);
+    }
+
+    /**
+     * Rebuilds the whole dependency graph from each formula's raw source text:
+     * clears every cell's stored dependents and re-registers them by re-saving
+     * each formula, so references an older build did not track (e.g.
+     * {@code get(SheetName, row, col)}) are included. Save the book afterwards to
+     * persist the repaired graph.
+     */
+    private void doRebuildDependencies() {
+        final String vars = varsArea.getText();
+        runBusy("Rebuilding dependency graph...", () -> rebuildDependenciesNow(vars));
+    }
+
+    private void rebuildDependenciesNow(String vars) {
+        try {
+            for (SheetView v : sheets) {
+                v.sheet.setBindingsText(vars);
+            }
+            for (SheetView v : sheets) {
+                for (int r = 0; r < v.sheet.rows(); r++) {
+                    for (int c = 1; c <= v.sheet.cols(); c++) {
+                        Cell cell = v.sheet.registeredCell(r, c);
+                        if (cell != null) {
+                            cell.setDependents(null);
+                        }
+                    }
+                }
+            }
+            for (SheetView v : sheets) {
+                List<int[]> formulas = new ArrayList<>();
+                for (int r = 0; r < v.sheet.rows(); r++) {
+                    for (int c = 1; c <= v.sheet.cols(); c++) {
+                        Cell cell = v.sheet.registeredCell(r, c);
+                        if (cell != null && cell.hasFormula()
+                                && !cell.getRawExpression().isBlank()) {
+                            formulas.add(new int[] { r, c });
+                        }
+                    }
+                }
+                for (int[] rc : formulas) {
+                    Cell cell = v.sheet.registeredCell(rc[0], rc[1]);
+                    String raw = cell.getRawExpression();
+                    String text = v.sheet.getRawValue(rc[0], rc[1]);
+                    Node node = Expression.parse(raw, v.sheet.registry()).getOptimized();
+                    v.sheet.saveCell(rc[0], rc[1], text, raw, node, cell.getType(),
+                            node.collectReferenced(), v.sheet.getFormatPattern(rc[0], rc[1]),
+                            v.sheet.getAlignment(rc[0], rc[1]));
+                }
+            }
+            recomputeAllSheets();
+            SwingUtilities.invokeLater(() ->
+                    setStatus("Dependency graph rebuilt. Save the book to persist it."));
+        } catch (RuntimeException ex) {
+            SwingUtilities.invokeLater(() -> showError(ex));
+        }
+    }
+
+    /** Runs {@code work} on a background thread behind the animated busy overlay. */
+    private void runBusy(String message, Runnable work) {
+        if (frame == null) {
+            work.run();
+            return;
+        }
+        beginBusy(message);
+        Thread t = new Thread(() -> {
+            try {
+                work.run();
+            } finally {
+                SwingUtilities.invokeLater(this::endBusy);
+            }
+        }, "busy-work");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void beginBusy(String message) {
+        BusyOverlay.show(message);
+    }
+
+    private void endBusy() {
+        BusyOverlay.hideIndicator();
     }
 
     /**
@@ -673,6 +758,32 @@ public class BookGui {
         tabs.removeTabAt(from);
         tabs.insertTab(title, null, comp, null, to);
         tabs.setSelectedIndex(to);
+        syncVisualOrder();
+        refreshTabTooltips();
+    }
+
+    /**
+     * Shows each sheet's generic sequence/index (an application, e.g. payroll,
+     * assigns these from the period) as the tab's tooltip, so the period a sheet
+     * belongs to is visible.
+     */
+    private void refreshTabTooltips() {
+        for (int i = 0; i < tabs.getTabCount() && i < sheets.size(); i++) {
+            tabs.setToolTipTextAt(i, describePeriod(sheets.get(i).sheet));
+        }
+    }
+
+    /** A human-readable description of a sheet's generic sequence/index (its period). */
+    private static String describePeriod(Sheet s) {
+        if (s.label() != null && !s.label().isBlank()) {
+            return "Period: " + s.label();
+        }
+        if (s.sequenceIndex() > 0) {
+            String seq = s.sequence();
+            return "Period: " + (seq == null || seq.isEmpty() ? "(year unset)" : "year " + seq)
+                    + ", index " + s.sequenceIndex();
+        }
+        return "Period: (none)";
     }
 
     private void doRenameSheet() {
@@ -692,7 +803,28 @@ public class BookGui {
         }
         int index = tabs.getSelectedIndex();
         tabs.setTitleAt(index, v.sheet.name());
+        refreshTabTooltips();
+        // Re-evaluate the sheet's expressions in its (possibly new) context.
+        runBusy("Recalculating...", v.sheet::rebuildExpressions);
+        for (SheetView sv : sheets) {
+            sv.grid.repaint();
+        }
+        updateGridSizeFields();
         setStatus("Sheet renamed: " + v.sheet.name());
+    }
+
+    /** Routes a grid right-click to the row menu (row-number column) or the cell menu. */
+    private void showGridPopup(SheetView v, MouseEvent e) {
+        int row = v.grid.rowAtPoint(e.getPoint());
+        int col = v.grid.columnAtPoint(e.getPoint());
+        if (row < 0 || row >= v.sheet.rows()) {
+            return;
+        }
+        if (col == 0) {
+            showRowMenu(v, row, e);
+        } else if (col > 0) {
+            showCellMenu(v, e);
+        }
     }
 
     private void showCellMenu(SheetView v, MouseEvent e) {
@@ -721,6 +853,21 @@ public class BookGui {
             typeMenu.add(item);
         }
         menu.add(typeMenu);
+        JMenuItem copy = new JMenuItem("Copy cell");
+        copy.addActionListener(ev -> copyCell(v, row, col));
+        menu.add(copy);
+        JMenuItem paste = new JMenuItem("Paste cell");
+        paste.setEnabled(copiedCell != null);
+        paste.addActionListener(ev -> pasteCell(v, row, col));
+        menu.add(paste);
+        JMenuItem moveFrom = new JMenuItem("Move from");
+        moveFrom.addActionListener(ev -> startMoveFrom(v, row, col));
+        menu.add(moveFrom);
+        JMenuItem moveTo = new JMenuItem("Move to");
+        moveTo.setEnabled(moveFromSet(v));
+        moveTo.addActionListener(ev -> moveTo(v, row, col));
+        menu.add(moveTo);
+        menu.addSeparator();
         JMenuItem editCell = new JMenuItem("Edit ...");
         editCell.addActionListener(ev -> showEditDialog(v, row, col, cell));
         menu.add(editCell);
@@ -752,6 +899,337 @@ public class BookGui {
         recompute.addActionListener(ev -> recomputeDependentsOnEdit(v, row, col));
         menu.add(recompute);
         return menu;
+    }
+
+    /**
+     * A copied cell: its raw grid text, raw expression source and presentation,
+     * so a paste can reproduce it exactly on any sheet.
+     */
+    private record CopiedCell(String text, String rawExpression, DataType type,
+                             String formatPattern, String alignment) {
+    }
+
+    /** Captures a cell's value/expression + type/format/alignment. */
+    private CopiedCell captureCell(SheetView v, int row, int col) {
+        Cell cell = v.sheet.cell(row, col);
+        boolean formula = cell.hasFormula();
+        // A formula is copied by its raw source; a constant is copied by its actual
+        // value (never its formatted display text, which is not a parseable source).
+        String text = formula
+                ? v.sheet.getRawValue(row, col)
+                : Cell.encodeValue(cell.getValue());
+        String raw = formula ? cell.getRawExpression() : "";
+        return new CopiedCell(text, raw == null ? "" : raw, cell.getType(),
+                v.sheet.getFormatPattern(row, col), v.sheet.getAlignment(row, col));
+    }
+
+    /** Applies a captured cell to the target cell (re-parsing/re-evaluating it). */
+    private void applyCell(SheetView v, int row, int col, CopiedCell cc) {
+        String raw = cc.rawExpression();
+        if (raw != null && !raw.isBlank()) {
+            Node node = Expression.parse(raw, v.sheet.registry()).getOptimized();
+            v.sheet.saveCell(row, col, cc.text(), raw, node, cc.type(),
+                    node.collectReferenced(), cc.formatPattern(), cc.alignment());
+        } else {
+            v.sheet.saveCell(row, col, cc.text(), "", null, cc.type(),
+                    null, cc.formatPattern(), cc.alignment());
+        }
+    }
+
+    /** Copies a cell (value/expression + type/format/alignment) to the clipboard. */
+    private void copyCell(SheetView v, int row, int col) {
+        copiedCell = captureCell(v, row, col);
+        setStatus("Cell (" + (row + 1) + "," + col + ") copied.");
+    }
+
+    /** Pastes the copied cell into the target cell (re-evaluating its expression). */
+    private void pasteCell(SheetView v, int row, int col) {
+        if (copiedCell == null) {
+            setStatus("Nothing to paste.");
+            return;
+        }
+        try {
+            applyCell(v, row, col, copiedCell);
+            recomputeDependentsOnEdit(v, row, col);
+            setStatus("Cell pasted into (" + (row + 1) + "," + col + ").");
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    // ------------------------------------------------------------ row operations
+
+    /** Right-click menu of a row-number cell: clear / delete / new / copy / paste row. */
+    private void showRowMenu(SheetView v, int row, MouseEvent e) {
+        selectWholeRow(v, row);
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem clear = new JMenuItem("Clear row");
+        clear.addActionListener(a -> clearRow(v, row));
+        JMenuItem del = new JMenuItem("Delete row");
+        del.addActionListener(a -> deleteRow(v, row));
+        JMenuItem add = new JMenuItem("New row");
+        add.addActionListener(a -> newRow(v, row));
+        JMenuItem copy = new JMenuItem("Copy row");
+        copy.addActionListener(a -> copyRow(v, row));
+        JMenuItem paste = new JMenuItem("Paste row");
+        paste.setEnabled(copiedRow != null);
+        paste.addActionListener(a -> pasteRow(v, row));
+        menu.add(clear);
+        menu.add(del);
+        menu.add(add);
+        menu.addSeparator();
+        menu.add(copy);
+        menu.add(paste);
+        menu.show(v.grid, e.getX(), e.getY());
+    }
+
+    /** Clears every cell of a row. */
+    private void clearRow(SheetView v, int row) {
+        for (int c = 1; c <= v.sheet.cols(); c++) {
+            v.sheet.clearCell(row, c);
+        }
+        v.grid.repaint();
+        setStatus("Row " + (row + 1) + " cleared.");
+    }
+
+    /** Copies every cell of a row to memory. */
+    private void copyRow(SheetView v, int row) {
+        copiedRow = new java.util.ArrayList<>();
+        for (int c = 1; c <= v.sheet.cols(); c++) {
+            copiedRow.add(captureCell(v, row, c));
+        }
+        setStatus("Row " + (row + 1) + " copied (" + copiedRow.size() + " cells).");
+    }
+
+    /** Pastes the copied row into the target row. */
+    private void pasteRow(SheetView v, int row) {
+        if (copiedRow == null) {
+            setStatus("Nothing to paste.");
+            return;
+        }
+        try {
+            int cols = Math.min(copiedRow.size(), v.sheet.cols());
+            for (int c = 1; c <= cols; c++) {
+                applyCell(v, row, c, copiedRow.get(c - 1));
+            }
+            recomputeRow(v, row, cols);
+            setStatus("Row pasted into row " + (row + 1) + ".");
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    /** Deletes a row: the rows below shift up and the grid loses one row. */
+    private void deleteRow(SheetView v, int row) {
+        int rows = v.sheet.rows();
+        if (rows <= 1) {
+            setStatus("Cannot delete the only row.");
+            return;
+        }
+        try {
+            for (int r = row; r < rows - 1; r++) {
+                for (int c = 1; c <= v.sheet.cols(); c++) {
+                    applyCell(v, r, c, captureCell(v, r + 1, c));
+                }
+            }
+            for (int c = 1; c <= v.sheet.cols(); c++) {
+                v.sheet.clearCell(rows - 1, c);
+            }
+            v.model.setSheetSize(rows - 1, v.sheet.cols());
+            installRenderers(v);
+            resizeRowNumberColumn(v.grid, rows - 1);
+            recomputeRow(v, row, v.sheet.cols());
+            updateGridSizeFields();
+            v.grid.repaint();
+            setStatus("Row " + (row + 1) + " deleted; grid resized to " + (rows - 1) + " rows.");
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    /** Adds one row at the end and copies the selected row into it. */
+    private void newRow(SheetView v, int row) {
+        int rows = v.sheet.rows();
+        try {
+            java.util.List<CopiedCell> src = new java.util.ArrayList<>();
+            for (int c = 1; c <= v.sheet.cols(); c++) {
+                src.add(captureCell(v, row, c));
+            }
+            v.model.setSheetSize(rows + 1, v.sheet.cols());
+            installRenderers(v);
+            resizeRowNumberColumn(v.grid, rows + 1);
+            for (int c = 1; c <= v.sheet.cols(); c++) {
+                applyCell(v, rows, c, src.get(c - 1));
+            }
+            recomputeRow(v, rows, v.sheet.cols());
+            updateGridSizeFields();
+            v.grid.repaint();
+            setStatus("New row added (row " + (rows + 1) + "), copied from row " + (row + 1) + ".");
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    /** Re-evaluates the cells of a row after a row operation. */
+    private void recomputeRow(SheetView v, int row, int cols) {
+        v.sheet.setBindingsText(varsArea.getText());
+        for (int c = 1; c <= cols; c++) {
+            v.sheet.recomputeDependentsOnEdit(row, c);
+        }
+        for (SheetView sv : sheets) {
+            sv.grid.repaint();
+        }
+    }
+
+    /**
+     * True when a "Move from" source is armed and belongs to the given view's book
+     * (so the Move to command is offered only within the same workbook).
+     */
+    private boolean moveFromSet(SheetView v) {
+        return moveFrom != null && moveFromView != null && moveFromView.sheet.book() == v.sheet.book();
+    }
+
+    /** Remembers the cell to move and asks the user to pick the target cell. */
+    private void startMoveFrom(SheetView v, int row, int col) {
+        moveFrom = new int[] { row, col };
+        moveFromView = v;
+        installEscapeCancel();
+        moveFromEscapeKey = KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0);
+        v.grid.requestFocusInWindow();
+        setStatus("Move from (" + (row + 1) + "," + col
+                + "): select the target cell and choose 'Move to', or press Esc to cancel.");
+    }
+
+    /** Cancels a pending move. */
+    private void cancelMove() {
+        moveFrom = null;
+        moveFromView = null;
+        removeEscapeCancel();
+        setStatus("Move cancelled.");
+    }
+
+    /** Moves the remembered cell's content into the target cell and clears the source. */
+    private void moveTo(SheetView v, int row, int col) {
+        if (!moveFromSet(v)) {
+            setStatus("No cell to move (choose 'Move from' first).");
+            return;
+        }
+        int fromRow = moveFrom[0];
+        int fromCol = moveFrom[1];
+        if (fromRow == row && fromCol == col) {
+            setStatus("Move target is the same as the source; nothing to do.");
+            cancelMove();
+            return;
+        }
+        int removed = removedMovableCellRefs(v.sheet, fromRow, fromCol, row, col);
+        try {
+            Sheet s = v.sheet;
+            Cell src = s.cell(fromRow, fromCol);
+            String text = s.getRawValue(fromRow, fromCol);
+            String raw = src.getRawExpression();
+            Node node = (raw != null && !raw.isBlank())
+                    ? Expression.parse(raw, s.registry()).getOptimized() : null;
+            s.saveCell(row, col, text, raw == null ? "" : raw, node, src.getType(),
+                    node == null ? null : node.collectReferenced(),
+                    s.getFormatPattern(fromRow, fromCol), s.getAlignment(fromRow, fromCol));
+            // Recalculate the destination and its dependents before clearing the
+            // source, so the dependents rewritten to the new position recompute.
+            recomputeDependentsOnEdit(v, row, col);
+            // The source is cleared last: saveCell unlinks its old references.
+            s.saveCell(fromRow, fromCol, "", "", null, DataType.ANY, null,
+                    s.getFormatPattern(fromRow, fromCol), s.getAlignment(fromRow, fromCol));
+            recomputeDependentsOnEdit(v, fromRow, fromCol);
+            v.grid.repaint();
+            setStatus("Moved (" + (fromRow + 1) + "," + fromCol + ") -> (" + (row + 1) + "," + col
+                    + "); " + removed + " reference(s) re-wired.");
+        } catch (Exception ex) {
+            showError(ex);
+        } finally {
+            cancelMove();
+        }
+    }
+
+    /**
+     * Rewrites references to the moved source cell so they point at the
+     * destination cell (in every sheet of the workbook), and rewrites the
+     * references of the moved cell itself so references to the overwritten target
+     * cell point back at the (old) source position. Returns the number of
+     * references rewritten.
+     */
+    private int removedMovableCellRefs(Sheet destination, int fromRow, int fromCol, int toRow, int toCol) {
+        SheetBook book = destination.book();
+        CellRef fromRef = new CellRef(destination.sheetIndex(), fromRow, fromCol - 1);
+        CellRef toRef = new CellRef(destination.sheetIndex(), toRow, toCol - 1);
+        int changed = 0;
+        for (int i = 0; i < book.size(); i++) {
+            Sheet s = book.get(i);
+            if (s == null) {
+                continue;
+            }
+            boolean any = false;
+            for (int r = 0; r < s.rows(); r++) {
+                for (int c = 1; c <= s.cols(); c++) {
+                    Cell cell = s.registeredCell(r, c);
+                    if (cell == null || !cell.hasFormula()
+                            || cell.getRawExpression().isBlank()) {
+                        continue;
+                    }
+                    String at = cell.getRawExpression();
+                    String text = s.getRawValue(r, c);
+                    Node node = cell.getExpression();
+                    Set<CellRef> refs = node == null ? null : new java.util.LinkedHashSet<>();
+                    if (refs == null) {
+                        continue;
+                    }
+                    for (CellRef ref : node.collectReferenced()) {
+                        refs.add(ref.normalize(s.sheetIndex()));
+                    }
+                    boolean rewired = false;
+                    if (refs.remove(fromRef)) {
+                        refs.add(toRef);
+                        rewired = true;
+                    }
+                    if (refs.remove(toRef)) {
+                        refs.add(fromRef);
+                        rewired = true;
+                    }
+                    if (!rewired) {
+                        continue;
+                    }
+                    s.saveCell(r, c, text, at, node, cell.getType(), refs,
+                            s.getFormatPattern(r, c), s.getAlignment(r, c));
+                    changed++;
+                }
+            }
+        }
+        return changed;
+    }
+
+    /** The view holding the pending "Move from" source. */
+    private SheetView moveFromView;
+    /** The key that cancels a pending move. */
+    private KeyStroke moveFromEscapeKey;
+
+    /** Installs the Esc key so a pending move can be cancelled. */
+    private void installEscapeCancel() {
+        javax.swing.JComponent root = frame.getRootPane();
+        root.getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "cancelMove");
+        root.getActionMap().put("cancelMove", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                if (moveFrom != null) {
+                    cancelMove();
+                    frame.repaint();
+                }
+            }
+        });
+    }
+
+    private void removeEscapeCancel() {
+        javax.swing.JComponent root = frame.getRootPane();
+        root.getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .remove(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0));
     }
 
     /**
@@ -951,27 +1429,81 @@ public class BookGui {
     }
 
     private void showEditDialog(SheetView v, int row, int col, Cell cell) {
+        cancelGridEditTimer();
+        lastClickRow = -1;
+        lastClickCol = -1;
         try {
             v.sheet.setBindingsText(varsArea.getText());
         } catch (Exception ex) {
             showError(ex);
             return;
         }
+        if (cell.getFormatPattern() == null || cell.getFormatPattern().isEmpty()) {
+            cell.setFormatPattern(v.sheet.getFormatPattern(row, col));
+        }
+        if (cell.getHorizontalAlignment() == null || cell.getHorizontalAlignment().isEmpty()) {
+            cell.setHorizontalAlignment(v.sheet.getAlignment(row, col));
+        }
         CellDialog dlg = new CellDialog((Frame) SwingUtilities.getWindowAncestor(v.grid),
                 cell, v.sheet.registry(), v.sheet.bindings());
+        dlg.setSheet(v.sheet);
+        dlg.setContext(contextBoxName, v.sheet.name());
         dlg.setPosition(row, col);
         dlg.setCellName(v.sheet.cellName(row, col));
         dlg.setVisible(true);
         if (dlg.wasSaved()) {
+            // Use the dialog's format when the user touched the field (so clearing
+            // it really clears the format); otherwise keep the cell's current one.
+            String fmt = dlg.wasFormatEdited()
+                    ? dlg.getEditedFormatPattern()
+                    : (cell.getFormatPattern() != null
+                            ? cell.getFormatPattern() : v.sheet.getFormatPattern(row, col));
             v.sheet.saveCell(row, col, dlg.getEditedText(), dlg.getEditedRawExpression(),
                     dlg.getEditedNode(), dlg.getEditedDataType(), dlg.getEditedReferencedCells(),
-                    dlg.getEditedFormatPattern(), dlg.getEditedAlignment());
+                    fmt, dlg.getEditedAlignment());
+            v.sheet.cell(row, col).setTypeExplicit(dlg.isExplicitType());
             recomputeDependentsOnEdit(v, row, col);
         }
     }
 
+    /** Cancels a pending "click the selected cell again to edit it" gesture. */
+    private void cancelGridEditTimer() {
+        if (gridEditTimer != null) {
+            gridEditTimer.stop();
+            gridEditTimer = null;
+        }
+    }
+
+    /**
+     * Starts in-place editing of a grid cell after the platform's multi-click
+     * interval, so a real double-click (which opens the cell editor window) can
+     * cancel it first. The editor works on the cell's raw value text.
+     */
+    private void scheduleGridEdit(SheetView v, int row, int col) {
+        cancelGridEditTimer();
+        Object p = java.awt.Toolkit.getDefaultToolkit().getDesktopProperty("awt.multiClickInterval");
+        int delay = (p instanceof Integer i) ? i : 400;
+        gridEditTimer = new javax.swing.Timer(delay, e -> {
+            gridEditTimer = null;
+            if (v.grid.isShowing() && v.grid.editCellAt(row, col)) {
+                java.awt.Component c = v.grid.getEditorComponent();
+                if (c != null) {
+                    c.requestFocusInWindow();
+                    if (c instanceof javax.swing.JTextField tf) {
+                        tf.selectAll();
+                    }
+                }
+            }
+        });
+        gridEditTimer.setRepeats(false);
+        gridEditTimer.start();
+    }
+
     private void recomputeDependentsOnEdit(SheetView v, int row, int col) {
         try {
+            if (frame != null) {
+                frame.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+            }
             v.sheet.setBindingsText(varsArea.getText());
             v.sheet.recomputeDependentsOnEdit(row, col);
             for (SheetView sv : sheets) {
@@ -983,6 +1515,13 @@ public class BookGui {
                                     + ": the name is used by a sheet or reserved]"));
         } catch (Exception ex) {
             showError(ex);
+        } finally {
+            if (frame != null) {
+                frame.setCursor(java.awt.Cursor.getDefaultCursor());
+            }
+        }
+        if (cellEditListener != null) {
+            cellEditListener.run();
         }
     }
 
@@ -1129,6 +1668,7 @@ public class BookGui {
         SheetView v = current();
         rowsField.setText(v == null ? "" : String.valueOf(v.sheet.rows()));
         colsField.setText(v == null ? "" : String.valueOf(v.sheet.cols()));
+        periodLabel.setText(v == null ? " " : "   " + describePeriod(v.sheet));
     }
 
     private void showError(Exception ex) {
@@ -1206,16 +1746,68 @@ public class BookGui {
             }
             SheetView active = current();
             String activeUuid = active == null ? null : active.sheet.uuid();
-            String xml = WorkbookIO.toXml(book, varsArea.getText(), order, activeUuid, widths, version);
+            String xml = WorkbookIO.toXml(book, varsArea.getText(), order, activeUuid, widths, version,
+                    frame == null ? 0 : frame.getWidth(), frame == null ? 0 : frame.getHeight());
             Files.writeString(target, xml);
             currentFile = target.toAbsolutePath().normalize();
             currentDir = currentFile.getParent() != null ? currentFile.getParent().toFile() : null;
             updateTitle();
             setStatus("Workbook saved to " + currentFile.getFileName()
                     + " (v" + versionName(version) + ")");
+            if (saveListener != null) {
+                saveListener.run();
+            }
         } catch (Exception ex) {
             showError(ex);
         }
+    }
+
+    /**
+     * Sets a callback invoked right after a successful whole-workbook save. The
+     * graph uses it to run the connections sourced from the saved book.
+     */
+    public void setSaveListener(Runnable listener) {
+        this.saveListener = listener;
+    }
+
+    /**
+     * Sets a callback invoked after a cell edit is committed and its dependents are
+     * recalculated. The graph uses it to check/run the connections sourced from the
+     * book as soon as its content changes.
+     */
+    public void setCellEditListener(Runnable listener) {
+        this.cellEditListener = listener;
+    }
+
+    /** The window, so embedders can react to it being closed. */
+    public javax.swing.JFrame getFrame() {
+        return frame;
+    }
+
+    /** The file the workbook was last saved to / opened from, or null. */
+    public String currentFilePath() {
+        return currentFile == null ? null : currentFile.toString();
+    }
+
+    /** The current workbook as XML (the same construction as Save, without writing). */
+    public String currentXml() {
+        List<String> order = new ArrayList<>();
+        List<List<Integer>> widths = new ArrayList<>();
+        for (int i = 0; i < book.size(); i++) {
+            widths.add(null);
+        }
+        for (SheetView v : sheets) {
+            order.add(v.sheet.uuid());
+            int idx = book.indexOf(v.sheet);
+            if (idx >= 0 && idx < widths.size()) {
+                widths.set(idx, dataColumnWidths(v.grid));
+            }
+        }
+        SheetView active = current();
+        String activeUuid = active == null ? null : active.sheet.uuid();
+        int version = saveVersion <= 0 ? WorkbookIO.VERSION_1 : saveVersion;
+        return WorkbookIO.toXml(book, varsArea.getText(), order, activeUuid, widths, version,
+                frame == null ? 0 : frame.getWidth(), frame == null ? 0 : frame.getHeight());
     }
 
     /**
@@ -1296,6 +1888,7 @@ public class BookGui {
             }
             SheetView v = createSheetView();
             v.sheet.setName(ls.name);
+            WorkbookIO.applySheetState(v.sheet, ls);
             v.sheet.setUuid(ls.uuid);
             v.model.setSheetSize(ls.rows, ls.cols);
             installRenderers(v);
@@ -1303,6 +1896,7 @@ public class BookGui {
             applyColumnWidths(v.grid, ls.columnWidths);
             v.sheet.setNamedRefs(ls.names);
             v.sheet.setNamedRanges(ls.ranges);
+            v.sheet.setRangeSpecs(ls.rangeSpecs);
             tabs.addTab(v.sheet.name(), scrollFor(v));
             created.add(v);
             kept.add(ls);
@@ -1315,17 +1909,25 @@ public class BookGui {
                 v.sheet.restoreCell(lc);
             }
         }
+        // Apply the saved tab order first: prev[...] follows it, so the sheets must
+        // be in their saved order before any recalculation uses prev.
+        applyVisualOrder(loaded.visualOrder, loaded.activeSheet);
         for (SheetView v : sheets) {
             v.sheet.setBindingsText(varsArea.getText());
-            if (!loaded.fullyStored) {
+            // Use the persisted values when every cell carried its cached state;
+            // only re-evaluate when something was missing (or on explicit rebuild).
+            if (!v.sheet.isRestoreComplete() || !loaded.fullyStored) {
                 v.sheet.recomputeAll();
             }
             updateRowHeight(v);      // a saved caption font may need more room
             v.grid.repaint();
         }
-        applyVisualOrder(loaded.visualOrder, loaded.activeSheet);
         updateGridSizeFields();
         updateTitle();
+        // Restore the saved window size (Book GUI presentation).
+        if (loaded.windowWidth > 0 && loaded.windowHeight > 0 && frame != null) {
+            frame.setSize(loaded.windowWidth, loaded.windowHeight);
+        }
     }
 
     /**
@@ -1361,6 +1963,8 @@ public class BookGui {
         } else if (tabs.getTabCount() > 0) {
             tabs.setSelectedIndex(0);
         }
+        syncVisualOrder();
+        refreshTabTooltips();
     }
 
     /** The view of the sheet with the given UUID, or null. */
@@ -1430,26 +2034,126 @@ public class BookGui {
     /** Builds the sheet tab menu. */
     private JPopupMenu buildTabMenu() {
         JPopupMenu menu = new JPopupMenu();
+        SheetView cur = current();
+        if (cur != null) {
+            JMenuItem period = new JMenuItem(describePeriod(cur.sheet));
+            period.setEnabled(false);
+            menu.add(period);
+            JMenuItem setPeriod = new JMenuItem("Set period...");
+            setPeriod.addActionListener(e -> doSetPeriod());
+            menu.add(setPeriod);
+            menu.addSeparator();
+        }
         JMenuItem duplicate = new JMenuItem("Duplicate sheet");
         JMenuItem delete = new JMenuItem("Delete");
         JMenuItem resize = new JMenuItem("Resize...");
         JMenuItem names = new JMenuItem("Names ...");
         JMenuItem saveAs = new JMenuItem("Save as...");
         JMenuItem importItem = new JMenuItem("Import...");
+        JMenuItem formatCopy = new JMenuItem("Format copy");
+        JMenuItem formatPaste = new JMenuItem("Format paste");
         duplicate.addActionListener(e -> doDuplicateSheet());
         delete.addActionListener(e -> doDeleteSheet());
         resize.addActionListener(e -> doCreateArray());
         names.addActionListener(e -> openNamedCellsPopup());
         saveAs.addActionListener(e -> doSaveSheetAs());
         importItem.addActionListener(e -> doImportSheet());
+        formatCopy.addActionListener(e -> formatCopy());
+        formatPaste.addActionListener(e -> formatPaste());
         menu.add(duplicate);
         menu.add(delete);
         menu.add(resize);
         menu.add(names);
         menu.addSeparator();
+        menu.add(formatCopy);
+        menu.add(formatPaste);
+        menu.addSeparator();
         menu.add(saveAs);
         menu.add(importItem);
+        menu.addSeparator();
+        JMenuItem recalcSheet = new JMenuItem("Recalculate sheet");
+        recalcSheet.addActionListener(e -> recalcCurrentSheet());
+        menu.add(recalcSheet);
+        JMenuItem recalc = new JMenuItem("Recalculate all");
+        recalc.addActionListener(e -> runBusy("Recalculating...", this::recomputeAllSheets));
+        menu.add(recalc);
+        JMenuItem rebuild = new JMenuItem("Rebuild dependencies");
+        rebuild.addActionListener(e -> doRebuildDependencies());
+        menu.add(rebuild);
         return menu;
+    }
+
+    /** Copies the current sheet's presentation (column widths, formats, cell styles). */
+    private void formatCopy() {
+        SheetView v = current();
+        if (v == null) {
+            setStatus("There is no sheet to copy the format from.");
+            return;
+        }
+        copiedPresentation = v.sheet.capturePresentation();
+        copiedPresentation.columnWidths = dataColumnWidths(v.grid);
+        setStatus("Format copied from '" + v.sheet.name() + "' ("
+                + copiedPresentation.formats.size() + " format(s), "
+                + copiedPresentation.styles.size() + " style(s)).");
+    }
+
+    /** Applies the copied presentation (column widths, formats, cell styles) to the current sheet. */
+    private void formatPaste() {
+        if (copiedPresentation == null) {
+            setStatus("No format has been copied yet.");
+            return;
+        }
+        SheetView v = current();
+        if (v == null) {
+            setStatus("There is no sheet to paste the format into.");
+            return;
+        }
+        v.sheet.applyPresentation(copiedPresentation);
+        if (copiedPresentation.columnWidths != null) {
+            applyColumnWidths(v.grid, copiedPresentation.columnWidths);
+        }
+        updateRowHeight(v);
+        v.grid.repaint();
+        setStatus("Format pasted into '" + v.sheet.name() + "'.");
+    }
+
+    /**
+     * Prompts for the current sheet's period (year, month) and sets it explicitly.
+     * The generic core only stores the opaque sequence/index; the payroll session
+     * turns it into a month label. An explicitly set period is not overridden by a
+     * name-based convention.
+     */
+    private void doSetPeriod() {
+        SheetView v = current();
+        if (v == null) {
+            setStatus("There is no sheet to set a period for.");
+            return;
+        }
+        JTextField yearField = new JTextField(v.sheet.sequence() == null ? "0" : v.sheet.sequence(), 6);
+        JTextField monthField = new JTextField(
+                v.sheet.sequenceIndex() <= 0 ? "" : String.valueOf(v.sheet.sequenceIndex()), 4);
+        JPanel panel = new JPanel(new GridLayout(0, 1, 4, 4));
+        panel.add(new JLabel("Year (0 = any):"));
+        panel.add(yearField);
+        panel.add(new JLabel("Month (1-12, 0 = none):"));
+        panel.add(monthField);
+        if (JOptionPane.showConfirmDialog(frame, panel, "Set period - " + v.sheet.name(),
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) {
+            return;
+        }
+        try {
+            int year = Integer.parseInt(yearField.getText().trim());
+            int month = Integer.parseInt(monthField.getText().trim());
+            if (year < 0 || month < 0 || month > 12) {
+                throw new NumberFormatException("year must be >= 0 and month 0..12");
+            }
+            v.sheet.setSequence(year <= 0 ? "" : String.valueOf(year), month);
+            refreshTabTooltips();
+            updateGridSizeFields();
+            setStatus("Period set: " + describePeriod(v.sheet));
+        } catch (NumberFormatException ex) {
+            showError(ex);
+        }
     }
 
     /**
@@ -1465,6 +2169,7 @@ public class BookGui {
             setStatus("There is no sheet to duplicate.");
             return;
         }
+        int srcTab = tabs.getSelectedIndex();
         Sheet src = v.sheet;
         String name = nextSheetName();       // before the new slot exists
         SheetView copy = createSheetView();
@@ -1477,16 +2182,24 @@ public class BookGui {
             copySheet(src, copy.sheet);
             applyColumnWidths(copy.grid, dataColumnWidths(v.grid));
             updateRowHeight(copy);           // the copy may carry bigger caption fonts
-            // Every expression node on the new sheet is evaluated again, so the
-            // copy's formulas are computed from the copy's own context (its cells,
-            // and relatives such as prev).
-            copy.sheet.recomputeAll();
         } catch (RuntimeException ex) {
             showError(ex);
             return;
         }
-        tabs.addTab(copy.sheet.name(), scrollFor(copy));
-        tabs.setSelectedIndex(tabs.getTabCount() - 1);
+        // Place the copy directly after the source (display list + tab strip), so its
+        // relative references - prev[...] - point at the source sheet.
+        sheets.remove(copy);
+        int at = Math.max(0, Math.min(srcTab + 1, sheets.size()));
+        sheets.add(at, copy);
+        tabs.insertTab(copy.sheet.name(), null, scrollFor(copy), null, at);
+        tabs.setSelectedIndex(at);
+        syncVisualOrder();
+        refreshTabTooltips();
+        // Re-evaluate every expression in the copy's own (new) context.
+        copy.sheet.rebuildExpressions();
+        for (SheetView sv : sheets) {
+            sv.grid.repaint();
+        }
         updateGridSizeFields();
         setStatus("Sheet duplicated: " + copy.sheet.name() + " (copy of " + src.name() + ").");
     }
@@ -1578,9 +2291,10 @@ public class BookGui {
             }
             v.sheet.setNamedRefs(ls.names);
             v.sheet.setNamedRanges(ls.ranges);
+            v.sheet.setRangeSpecs(ls.rangeSpecs);
             v.sheet.setBindingsText(varsArea.getText());
-            if (!loaded.fullyStored) {
-                v.sheet.recomputeAll();
+            if (!v.sheet.isRestoreComplete() || !loaded.fullyStored) {
+                v.sheet.recomputeAll();      // only when the cache was incomplete
             }
             updateRowHeight(v);              // the imported sheet may carry bigger fonts
             tabs.addTab(v.sheet.name(), scrollFor(v));
@@ -1617,24 +2331,46 @@ public class BookGui {
                 String gridText = src.getRawValue(r, c);
                 String fmt = src.getFormatPattern(r, c);
                 String al = src.getAlignment(r, c);
-                // Only a real expression is re-parsed; a constant node is a value,
-                // so its value text is never carried over as a raw expression.
-                Node srcExpr = cell.getExpression();
-                if (srcExpr != null && !(srcExpr instanceof ConstantNode)
-                        && raw != null && !raw.isEmpty()) {
+                boolean copied = false;
+                // Rebuild every expression from its raw source text in the copy's
+                // own context; saveCell re-registers the referenced set here and the
+                // dependents on each referenced cell (cross-sheet and prev included).
+                if (raw != null && !raw.trim().isEmpty()) {
+                    // Rebuild the node from the original raw source text in the copy's
+                    // context. If that fails, keep the source's node: the expression is
+                    // never dropped and never silently turned into a constant - the
+                    // error (if any) is reported only when the cell is evaluated.
+                    Node node = cell.getExpression();
                     try {
-                        Node node = Expression.parse(raw, dst.registry()).getOptimized();
-                        // Store the unformatted value as the grid text so it parses
-                        // back to the same number (the format pattern re-renders it).
-                        String valueText = cell.getValue() == null ? "" : Cell.encodeValue(cell.getValue());
+                        node = Expression.parse(raw, dst.registry()).getOptimized();
+                    } catch (RuntimeException ignored) {
+                        // keep the source's node
+                    }
+                    if (node != null && !(node instanceof ConstantNode)) {
+                        String valueText = cell.getValue() == null
+                                ? "" : Cell.encodeValue(cell.getValue());
                         dst.saveCell(r, c, valueText, raw, node, cell.getType(),
                                 node.collectReferenced(), fmt, al);
-                        continue;
-                    } catch (RuntimeException ignored) {
-                        // fall through and copy it as a literal
+                        copied = true;
                     }
                 }
-                if (gridText != null && !gridText.isEmpty()) {
+                if (!copied && cell.getValue() != null) {
+                    // A constant: copy its value AND datatype (never the formatted
+                    // display text, which could re-parse as a STRING).
+                    Object value = cell.getValue();
+                    String text;
+                    if (cell.getType() == DataType.STRING) {
+                        text = "'" + String.valueOf(value).replace("'", "\\'") + "'";
+                    } else if (cell.getType() == DataType.NUMERIC && value instanceof Number n) {
+                        text = EvalUtil.format(n.doubleValue());
+                    } else {
+                        text = Cell.encodeValue(value);
+                    }
+                    dst.saveCell(r, c, text, "", Cell.parse(text).constantNode(),
+                            cell.getType(), null, fmt, al);
+                    copied = true;
+                }
+                if (!copied && gridText != null && !gridText.isEmpty()) {
                     dst.setRawValue(r, c, gridText);
                     if (fmt != null) {
                         dst.setFormatPattern(r, c, fmt);

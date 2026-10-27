@@ -48,6 +48,15 @@ public final class WorkbookIO {
         public final Map<String, CellRef> names = new LinkedHashMap<>();
         /** Named rectangular ranges restored from the XML: name -> CellRect (0-based, sheet 0). */
         public final Map<String, CellRect> ranges = new LinkedHashMap<>();
+        /** $-aware named-range definitions (name -> spec), for dynamic ranges. */
+        public final Map<String, NamedRangeSpec> rangeSpecs = new LinkedHashMap<>();
+        /**
+         * An explicitly set period as {@code "year:index"} (year may be empty),
+         * or null when the period is not stored (an application derives it).
+         */
+        public String period;
+        /** True when the sheet's values were frozen (not recomputed on load). */
+        public boolean frozen;
         /** Saved data-column widths of the sheet's grid (presentation), in order. */
         public final List<Integer> columnWidths = new ArrayList<>();
 
@@ -117,6 +126,9 @@ public final class WorkbookIO {
         public final List<String> visualOrder = new ArrayList<>();
         /** Saved active tab as the sheet's UUID, or null. */
         public String activeSheet;
+        /** Saved Book GUI window width/height (0 = not saved). */
+        public int windowWidth;
+        public int windowHeight;
         /** Workbook format version: {@link #VERSION_1} or {@link #VERSION_2}. */
         public int version = VERSION_1;
 
@@ -126,6 +138,33 @@ public final class WorkbookIO {
     }
 
     private WorkbookIO() {
+    }
+
+    /**
+     * Applies a loaded sheet's generic state to a live sheet: its explicit period
+     * ({@code "year:index"}) and whether its values are frozen.
+     */
+    public static void applySheetState(Sheet sheet, LoadedSheet ls) {
+        if (sheet == null || ls == null) {
+            return;
+        }
+        String period = ls.period;
+        if (period != null && !period.isEmpty()) {
+            int colon = period.indexOf(':');
+            String year = colon < 0 ? period : period.substring(0, colon);
+            int index = 0;
+            if (colon >= 0) {
+                try {
+                    index = Integer.parseInt(period.substring(colon + 1).trim());
+                } catch (NumberFormatException e) {
+                    index = 0;
+                }
+            }
+            sheet.setSequence(year, index);
+        }
+        if (ls.frozen) {
+            sheet.setFrozen(true);
+        }
     }
 
     /** Version 1: expression trees as XML {@code <node>} elements. */
@@ -175,8 +214,21 @@ public final class WorkbookIO {
     public static String toXml(SheetBook book, String variablesText,
                                List<String> visualOrder, String activeSheet,
                                List<List<Integer>> columnWidths, int format) {
+        return toXml(book, variablesText, visualOrder, activeSheet, columnWidths, format, 0, 0);
+    }
+
+    /**
+     * Serializes the workbook, also recording the Book GUI window size
+     * ({@code windowWidth}/{@code windowHeight}, 0 when unknown) in the
+     * presentation section so the window reopens at its last size.
+     */
+    public static String toXml(SheetBook book, String variablesText,
+                               List<String> visualOrder, String activeSheet,
+                               List<List<Integer>> columnWidths, int format,
+                               int windowWidth, int windowHeight) {
         if (format >= VERSION_3) {
-            return v3Xml(book, variablesText, visualOrder, activeSheet, columnWidths);
+            return v3Xml(book, variablesText, visualOrder, activeSheet, columnWidths,
+                    windowWidth, windowHeight);
         }
         try {
             DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
@@ -218,6 +270,10 @@ public final class WorkbookIO {
             if (activeSheet != null && !activeSheet.isEmpty()) {
                 presEl.setAttribute("active", activeSheet);
             }
+            if (windowWidth > 0 && windowHeight > 0) {
+                presEl.setAttribute("w", String.valueOf(windowWidth));
+                presEl.setAttribute("h", String.valueOf(windowHeight));
+            }
             root.appendChild(presEl);
             Element presSheetsEl = doc.createElement("sheets");
             presEl.appendChild(presSheetsEl);
@@ -258,6 +314,13 @@ public final class WorkbookIO {
                     if (sb.length() > 0) {
                         presSheetEl.setAttribute("widths", sb.toString());
                     }
+                }
+                if (sheet.sequenceExplicit()) {
+                    presSheetEl.setAttribute("period",
+                            (sheet.sequence() == null ? "" : sheet.sequence()) + ":" + sheet.sequenceIndex());
+                }
+                if (sheet.isFrozen()) {
+                    presSheetEl.setAttribute("frozen", "1");
                 }
                 Element presCellsEl = doc.createElement("cells");
                 presSheetEl.appendChild(presCellsEl);
@@ -345,10 +408,23 @@ public final class WorkbookIO {
                     CellRect r = e.getValue().normalize(sheet.sheetIndex());
                     Element nameEl = doc.createElement("named");
                     nameEl.setAttribute("ref", e.getKey());
-                    nameEl.setAttribute("row", String.valueOf(r.getRow0() + 1));
-                    nameEl.setAttribute("col", String.valueOf(r.getCol0() + 1));
-                    nameEl.setAttribute("row2", String.valueOf(r.getRow1() + 1));
-                    nameEl.setAttribute("col2", String.valueOf(r.getCol1() + 1));
+                    NamedRangeSpec spec = sheet.rangeSpec(e.getKey());
+                    if (spec != null) {
+                        // Persist the $-aware definition so it re-resolves on resize.
+                        nameEl.setAttribute("row", String.valueOf(spec.row0));
+                        nameEl.setAttribute("col", String.valueOf(spec.col1));
+                        nameEl.setAttribute("row2", String.valueOf(spec.row1));
+                        nameEl.setAttribute("col2", String.valueOf(spec.col2));
+                        if (spec.dollarRow0) nameEl.setAttribute("drow", "1");
+                        if (spec.dollarCol1) nameEl.setAttribute("dcol", "1");
+                        if (spec.dollarRow1) nameEl.setAttribute("drow2", "1");
+                        if (spec.dollarCol2) nameEl.setAttribute("dcol2", "1");
+                    } else {
+                        nameEl.setAttribute("row", String.valueOf(r.getRow0() + 1));
+                        nameEl.setAttribute("col", String.valueOf(r.getCol0() + 1));
+                        nameEl.setAttribute("row2", String.valueOf(r.getRow1() + 1));
+                        nameEl.setAttribute("col2", String.valueOf(r.getCol1() + 1));
+                    }
                     namesEl.appendChild(nameEl);
                     anyNames = true;
                 }
@@ -376,9 +452,11 @@ public final class WorkbookIO {
      */
     private static String v3Xml(SheetBook book, String variablesText,
                                 List<String> visualOrder, String activeSheet,
-                                List<List<Integer>> columnWidths) {
+                                List<List<Integer>> columnWidths,
+                                int windowWidth, int windowHeight) {
         String payload = WorkbookCodec.toBase64(
-                snapshot(book, variablesText, visualOrder, activeSheet, columnWidths));
+                snapshot(book, variablesText, visualOrder, activeSheet, columnWidths,
+                        windowWidth, windowHeight));
         StringBuilder sb = new StringBuilder();
         sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n");
         sb.append("<workbook version=\"3.0\" encoding=\"gzip+base64\">\n");
@@ -395,8 +473,17 @@ public final class WorkbookIO {
     public static byte[] toPayload(SheetBook book, String variablesText,
                                    List<String> visualOrder, String activeSheet,
                                    List<List<Integer>> columnWidths) {
+        return toPayload(book, variablesText, visualOrder, activeSheet, columnWidths, 0, 0);
+    }
+
+    /** Like the 5-argument form but also records the Book GUI window size. */
+    public static byte[] toPayload(SheetBook book, String variablesText,
+                                   List<String> visualOrder, String activeSheet,
+                                   List<List<Integer>> columnWidths,
+                                   int windowWidth, int windowHeight) {
         return WorkbookCodec.toPayload(
-                snapshot(book, variablesText, visualOrder, activeSheet, columnWidths));
+                snapshot(book, variablesText, visualOrder, activeSheet, columnWidths,
+                        windowWidth, windowHeight));
     }
 
     /** Parses a v3 payload (from {@link #toPayload}) back into the model. */
@@ -414,12 +501,22 @@ public final class WorkbookIO {
     public static LoadedWorkbook snapshot(SheetBook book, String variablesText,
                                           List<String> visualOrder, String activeSheet,
                                           List<List<Integer>> columnWidths) {
+        return snapshot(book, variablesText, visualOrder, activeSheet, columnWidths, 0, 0);
+    }
+
+    /** Like the 5-argument form but also records the Book GUI window size. */
+    public static LoadedWorkbook snapshot(SheetBook book, String variablesText,
+                                          List<String> visualOrder, String activeSheet,
+                                          List<List<Integer>> columnWidths,
+                                          int windowWidth, int windowHeight) {
         LoadedWorkbook wb = new LoadedWorkbook(variablesText == null ? "" : variablesText);
         wb.fullyStored = true;
         if (visualOrder != null) {
             wb.visualOrder.addAll(visualOrder);
         }
         wb.activeSheet = activeSheet;
+        wb.windowWidth = windowWidth;
+        wb.windowHeight = windowHeight;
         for (int s = 0; s < book.size(); s++) {
             Sheet sheet = book.get(s);
             if (sheet == null || (sheet.rows() == 0 && sheet.cols() == 0)) {
@@ -428,6 +525,10 @@ public final class WorkbookIO {
             LoadedSheet ls = new LoadedSheet(sheet.rows(), sheet.cols());
             ls.name = sheet.name();
             ls.uuid = sheet.uuid();
+            if (sheet.sequenceExplicit()) {
+                ls.period = (sheet.sequence() == null ? "" : sheet.sequence()) + ":" + sheet.sequenceIndex();
+            }
+            ls.frozen = sheet.isFrozen();
             for (Map.Entry<String, CellRef> e : sheet.namedRefs().entrySet()) {
                 CellRef r = e.getValue().normalize(sheet.sheetIndex());
                 ls.names.put(e.getKey(), new CellRef(r.getSheet(), r.getRow(), r.getCol()));
@@ -436,6 +537,10 @@ public final class WorkbookIO {
                 CellRect r = e.getValue().normalize(sheet.sheetIndex());
                 ls.ranges.put(e.getKey(),
                         new CellRect(r.getSheet(), r.getRow0(), r.getCol0(), r.getRow1(), r.getCol1()));
+                NamedRangeSpec spec = sheet.rangeSpec(e.getKey());
+                if (spec != null && spec.dynamic()) {
+                    ls.rangeSpecs.put(e.getKey(), spec);
+                }
             }
             if (columnWidths != null && s < columnWidths.size() && columnWidths.get(s) != null) {
                 ls.columnWidths.addAll(columnWidths.get(s));
@@ -508,6 +613,8 @@ public final class WorkbookIO {
             // Presentation cells per sheet, keyed "row,col" (0-based).
             List<Map<String, Element>> presentation = new ArrayList<>();
             List<List<Integer>> presentationWidths = new ArrayList<>();
+            List<String> presentationPeriods = new ArrayList<>();
+            List<Boolean> presentationFrozen = new ArrayList<>();
             if (split) {
                 Element presSection = childElement(root, "presentation");
                 if (presSection != null) {
@@ -524,6 +631,8 @@ public final class WorkbookIO {
                     if (active != null && !active.trim().isEmpty()) {
                         wb.activeSheet = active.trim();
                     }
+                    wb.windowWidth = intAttr(presSection, "w");
+                    wb.windowHeight = intAttr(presSection, "h");
                 }
                 Element presSheetsEl = presSection == null ? null : childElement(presSection, "sheets");
                 if (presSheetsEl != null) {
@@ -532,6 +641,8 @@ public final class WorkbookIO {
                         Element presSheetEl = (Element) presSheets.item(i);
                         presentation.add(cellsByKey(presSheetEl));
                         presentationWidths.add(parseWidths(strAttr(presSheetEl, "widths")));
+                        presentationPeriods.add(strAttr(presSheetEl, "period"));
+                        presentationFrozen.add("1".equals(presSheetEl.getAttribute("frozen")));
                     }
                 }
             }
@@ -549,6 +660,12 @@ public final class WorkbookIO {
                     if (i < presentationWidths.size()) {
                         ls.columnWidths.addAll(presentationWidths.get(i));
                     }
+                    if (i < presentationPeriods.size()) {
+                        ls.period = presentationPeriods.get(i);
+                    }
+                    if (i < presentationFrozen.size()) {
+                        ls.frozen = presentationFrozen.get(i);
+                    }
                     NodeList nameNodes = sheetEl.getElementsByTagName("named");
                     for (int j = 0; j < nameNodes.getLength(); j++) {
                         Element nameEl = (Element) nameNodes.item(j);
@@ -557,11 +674,21 @@ public final class WorkbookIO {
                             continue;
                         }
                         if (nameEl.hasAttribute("row2")) {
-                            ls.ranges.put(ref, new CellRect(CellRect.CURRENT_SHEET,
-                                    intAttr(nameEl, "row") - 1,
-                                    intAttr(nameEl, "col") - 1,
-                                    intAttr(nameEl, "row2") - 1,
-                                    intAttr(nameEl, "col2") - 1));
+                            int r0 = intAttr(nameEl, "row") - 1;
+                            int c0 = intAttr(nameEl, "col") - 1;
+                            int r1 = intAttr(nameEl, "row2") - 1;
+                            int c1 = intAttr(nameEl, "col2") - 1;
+                            ls.ranges.put(ref, new CellRect(CellRect.CURRENT_SHEET, r0, c0, r1, c1));
+                            boolean dr0 = "1".equals(nameEl.getAttribute("drow"));
+                            boolean dc0 = "1".equals(nameEl.getAttribute("dcol"));
+                            boolean dr1 = "1".equals(nameEl.getAttribute("drow2"));
+                            boolean dc1 = "1".equals(nameEl.getAttribute("dcol2"));
+                            if (dr0 || dc0 || dr1 || dc1) {
+                                ls.rangeSpecs.put(ref, new NamedRangeSpec(ref,
+                                        intAttr(nameEl, "row"), intAttr(nameEl, "col"),
+                                        intAttr(nameEl, "row2"), intAttr(nameEl, "col2"),
+                                        dr0, dc0, dr1, dc1));
+                            }
                         } else {
                             ls.names.put(ref, new CellRef(CellRef.CURRENT_SHEET,
                                     intAttr(nameEl, "row") - 1, intAttr(nameEl, "col") - 1));

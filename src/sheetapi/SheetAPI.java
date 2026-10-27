@@ -216,8 +216,9 @@ public class SheetAPI implements AutoCloseable {
         }
         sheet.setNamedRefs(ls.names);
         sheet.setNamedRanges(ls.ranges);
+        sheet.setRangeSpecs(ls.rangeSpecs);
         sheet.setBindingsText(loaded.variablesText);
-        if (!loaded.fullyStored) {
+        if (!sheet.isRestoreComplete() || !loaded.fullyStored) {
             sheet.recomputeAll();
         }
         return new State(book, sheet, loaded.variablesText, sourceXmlPath);

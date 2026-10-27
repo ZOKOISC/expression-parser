@@ -91,6 +91,11 @@ public class SheetGui {
     private Path currentFile;
     /** Workbook format version used by the last save/load (default v1.0). */
     private int saveVersion = WorkbookIO.VERSION_1;
+    /** Pending "click the selected cell again to edit it" gesture. */
+    private javax.swing.Timer gridEditTimer;
+    /** The cell of the previous single click (the first of two), or (-1,-1). */
+    private int lastClickRow = -1;
+    private int lastClickCol = -1;
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(SheetGui::new);
@@ -148,12 +153,8 @@ public class SheetGui {
         view.sheet.loadDefaults();
         resizeRowNumberColumn(view.grid, 3);
 
-        JPanel varsPanel = new JPanel(new BorderLayout());
-        varsPanel.setBorder(BorderFactory.createTitledBorder("Variables (name = value, one per line)"));
+        // The variables live in a Settings dialog, not in an always-visible area.
         varsArea.setToolTipText(namingHint());
-        JScrollPane varsScroll = new JScrollPane(varsArea);
-        varsScroll.setPreferredSize(new Dimension(600, 70));
-        varsPanel.add(varsScroll, BorderLayout.CENTER);
 
         JPanel arrayControls = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         arrayControls.add(new JLabel("Size: ["));
@@ -176,7 +177,6 @@ public class SheetGui {
         frame.setJMenuBar(buildMenuBar());
         frame.setLayout(new BorderLayout());
         JPanel north = new JPanel(new BorderLayout());
-        north.add(varsPanel, BorderLayout.CENTER);
         north.add(arrayControls, BorderLayout.SOUTH);
         frame.add(north, BorderLayout.NORTH);
 
@@ -221,11 +221,30 @@ public class SheetGui {
         fileMenu.addSeparator();
         fileMenu.add(itemOpen);
         menuBar.add(fileMenu);
+        JMenu settingsMenu = new JMenu("Settings");
+        JMenuItem itemVariables = new JMenuItem("Variables...");
+        itemVariables.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_M, InputEvent.CTRL_DOWN_MASK));
+        itemVariables.setToolTipText("Edit the variables (name = value) of the sheet");
+        itemVariables.addActionListener(e -> editVariables());
+        settingsMenu.add(itemVariables);
+        menuBar.add(settingsMenu);
         itemNew.addActionListener(e -> doNewSheet());
         itemSave.addActionListener(e -> doSaveXml());
         itemSaveAs.addActionListener(e -> doSaveXmlAs());
         itemOpen.addActionListener(e -> doOpenXml());
         return menuBar;
+    }
+
+    /** Opens the variables editor (Settings &gt; Variables...); applies and recalculates. */
+    private void editVariables() {
+        String edited = VariablesDialog.edit(frame, "Variables", varsArea.getText());
+        if (edited == null) {
+            return;
+        }
+        varsArea.setText(edited);
+        view.sheet.setBindingsText(edited);
+        view.sheet.recomputeAll();
+        view.grid.repaint();
     }
 
     /**
@@ -260,13 +279,37 @@ public class SheetGui {
         v.grid.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
+                if (e.getButton() == MouseEvent.BUTTON1 && e.getClickCount() >= 2 && !e.isPopupTrigger()) {
+                    cancelGridEditTimer();
+                    lastClickRow = -1;
+                    lastClickCol = -1;
+                    int row = v.grid.rowAtPoint(e.getPoint());
+                    int col = v.grid.columnAtPoint(e.getPoint());
+                    if (row >= 0 && col > 0 && row < v.sheet.rows() && col <= v.sheet.cols()) {
+                        final int r = row;
+                        final int c = col;
+                        if (v.grid.isEditing()) {
+                            v.grid.getCellEditor().cancelCellEditing();
+                        }
+                        SwingUtilities.invokeLater(() -> {
+                            if (v.grid.isEditing()) {
+                                v.grid.getCellEditor().cancelCellEditing();
+                            }
+                            showEditDialog(v, r, c, v.sheet.cell(r, c));
+                        });
+                        return;
+                    }
+                }
                 if (e.isPopupTrigger()) {
                     showCellMenu(v, e);
                 } else if (e.getButton() == MouseEvent.BUTTON1) {
                     int row = v.grid.rowAtPoint(e.getPoint());
                     int col = v.grid.columnAtPoint(e.getPoint());
                     if (row >= 0 && row < v.sheet.rows() && col >= 0 && col <= v.sheet.cols()) {
+                        boolean sameCell = col > 0 && row == lastClickRow && col == lastClickCol;
                         if (col == 0) {
+                            lastClickRow = -1;
+                            lastClickCol = -1;
                             v.dragAnchorRow = -1;   // whole-row select: no drag range
                             selectWholeRow(v, row);
                         } else {
@@ -276,6 +319,19 @@ public class SheetGui {
                                 v.dragAnchorCol = col;
                             } else {
                                 v.dragAnchorRow = -1;
+                            }
+                            // Only a second single click on the same cell starts
+                            // in-place editing; a single click just selects.
+                            if (sameCell && e.getClickCount() == 1
+                                    && !e.isControlDown() && !e.isShiftDown()
+                                    && !v.grid.isEditing()
+                                    && v.grid.isCellEditable(row, col)) {
+                                scheduleGridEdit(v, row, col);
+                                lastClickRow = -1;
+                                lastClickCol = -1;
+                            } else {
+                                lastClickRow = row;
+                                lastClickCol = col;
                             }
                         }
                     }
@@ -290,22 +346,14 @@ public class SheetGui {
                     v.dragAnchorCol = -1;
                 }
             }
-
-            @Override
-            public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() >= 2 && e.getButton() == MouseEvent.BUTTON1 && !e.isPopupTrigger()) {
-                    int row = v.grid.rowAtPoint(e.getPoint());
-                    int col = v.grid.columnAtPoint(e.getPoint());
-                    if (row >= 0 && col > 0 && row < v.sheet.rows() && col <= v.sheet.cols()) {
-                        showEditDialog(v, row, col, v.sheet.cell(row, col));
-                    }
-                }
-            }
         });
         // Dragging the mouse over data cells extends the selection to a rectangle.
         v.grid.addMouseMotionListener(new MouseAdapter() {
             @Override
             public void mouseDragged(MouseEvent e) {
+                cancelGridEditTimer();
+                lastClickRow = -1;
+                lastClickCol = -1;
                 if (v.dragAnchorRow < 0
                         || (e.getModifiersEx() & MouseEvent.BUTTON1_DOWN_MASK) == 0) {
                     return;
@@ -867,23 +915,71 @@ public class SheetGui {
 
     /** Opens the CellDialog for one cell and saves the result back if accepted. */
     private void showEditDialog(SheetView v, int row, int col, Cell cell) {
+        cancelGridEditTimer();
+        lastClickRow = -1;
+        lastClickCol = -1;
         try {
             v.sheet.setBindingsText(varsArea.getText());
         } catch (Exception ex) {
             showError(ex);
             return;
         }
+        if (cell.getFormatPattern() == null || cell.getFormatPattern().isEmpty()) {
+            cell.setFormatPattern(v.sheet.getFormatPattern(row, col));
+        }
+        if (cell.getHorizontalAlignment() == null || cell.getHorizontalAlignment().isEmpty()) {
+            cell.setHorizontalAlignment(v.sheet.getAlignment(row, col));
+        }
         CellDialog dlg = new CellDialog((Frame) SwingUtilities.getWindowAncestor(v.grid),
                 cell, v.sheet.registry(), v.sheet.bindings());
+        dlg.setSheet(v.sheet);
         dlg.setPosition(row, col);
         dlg.setCellName(v.sheet.cellName(row, col));
         dlg.setVisible(true);
         if (dlg.wasSaved()) {
+            String fmt = dlg.getEditedFormatPattern();
+            if (fmt == null || fmt.isEmpty()) {
+                fmt = cell.getFormatPattern() != null
+                        ? cell.getFormatPattern() : v.sheet.getFormatPattern(row, col);
+            }
             v.sheet.saveCell(row, col, dlg.getEditedText(), dlg.getEditedRawExpression(),
                     dlg.getEditedNode(), dlg.getEditedDataType(), dlg.getEditedReferencedCells(),
-                    dlg.getEditedFormatPattern(), dlg.getEditedAlignment());
+                    fmt, dlg.getEditedAlignment());
             recomputeDependentsOnEdit(v, row, col);
         }
+    }
+
+    /** Cancels a pending "click the selected cell again to edit it" gesture. */
+    private void cancelGridEditTimer() {
+        if (gridEditTimer != null) {
+            gridEditTimer.stop();
+            gridEditTimer = null;
+        }
+    }
+
+    /**
+     * Starts in-place editing of a grid cell after the platform's multi-click
+     * interval, so a real double-click (which opens the cell editor window) can
+     * cancel it first. The editor works on the cell's raw value text.
+     */
+    private void scheduleGridEdit(SheetView v, int row, int col) {
+        cancelGridEditTimer();
+        Object p = java.awt.Toolkit.getDefaultToolkit().getDesktopProperty("awt.multiClickInterval");
+        int delay = (p instanceof Integer i) ? i : 400;
+        gridEditTimer = new javax.swing.Timer(delay, e -> {
+            gridEditTimer = null;
+            if (v.grid.isShowing() && v.grid.editCellAt(row, col)) {
+                java.awt.Component c = v.grid.getEditorComponent();
+                if (c != null) {
+                    c.requestFocusInWindow();
+                    if (c instanceof javax.swing.JTextField tf) {
+                        tf.selectAll();
+                    }
+                }
+            }
+        });
+        gridEditTimer.setRepeats(false);
+        gridEditTimer.start();
     }
 
     private void recomputeDependentsOnEdit(SheetView v, int row, int col) {
@@ -1079,6 +1175,7 @@ public class SheetGui {
         varsArea.setText(loaded.variablesText);
         view = createSheetView();
         view.sheet.setName(ls.name);
+        WorkbookIO.applySheetState(view.sheet, ls);
         view.sheet.setUuid(ls.uuid);
         saveVersion = loaded.version;
         view.model.setSheetSize(ls.rows, ls.cols);
@@ -1089,12 +1186,13 @@ public class SheetGui {
         gridPane.setViewportView(view.grid);
         view.sheet.setNamedRefs(ls.names);
         view.sheet.setNamedRanges(ls.ranges);
+        view.sheet.setRangeSpecs(ls.rangeSpecs);
         for (WorkbookIO.LoadedCell lc : ls.cells) {
             view.sheet.restoreCell(lc);
         }
         view.sheet.setBindingsText(varsArea.getText());
-        if (!loaded.fullyStored) {
-            view.sheet.recomputeAll();
+        if (!view.sheet.isRestoreComplete() || !loaded.fullyStored) {
+            view.sheet.recomputeAll();   // only when the cached state was incomplete
         }
         updateRowHeight();           // a saved caption font may need more room
         view.grid.repaint();

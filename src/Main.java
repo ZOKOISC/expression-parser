@@ -350,8 +350,9 @@ WorkbookIO.LoadedWorkbook loadedWb = WorkbookIO.fromXml(wbXml);
         }
         restored.setNamedRefs(loadedWb.sheets.get(0).names);
         restored.setNamedRanges(loadedWb.sheets.get(0).ranges);
+        restored.setRangeSpecs(loadedWb.sheets.get(0).rangeSpecs);
         restored.setBindingsText(loadedWb.variablesText);
-        if (!loadedWb.fullyStored) {
+        if (!restored.isRestoreComplete() || !loadedWb.fullyStored) {
             restored.recomputeAll();
         }
         assertCell(restored, 0, 1, "13");

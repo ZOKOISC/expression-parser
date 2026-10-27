@@ -56,6 +56,8 @@ public class SheetBook {
                 }
             }
         }
+        // prev[...] follows the tab order, so re-bind it after the order changes.
+        refreshAllSheetNameBindings();
     }
 
     /** 0-based visual index of the given sheet, or -1 if not present. */
@@ -89,11 +91,35 @@ public class SheetBook {
         return order;
     }
 
-    /** The live sheet before {@code sheet} in tab order, or null when it is first. */
+    /**
+     * The live sheet before {@code sheet}: the sheet with the previous index in the
+     * same {@code sequence} when the sheet has one (so {@code prev[...]} is
+     * deterministic and does not depend on the tab order), otherwise the tab-order
+     * predecessor. Assigning sequences is an application concern.
+     */
     public Sheet previousSheet(Sheet sheet) {
+        if (sheet != null && sheet.sequenceIndex() > 0) {
+            Sheet p = sheetBySequence(sheet.sequence(), sheet.sequenceIndex() - 1);
+            if (p != null) {
+                return p;
+            }
+        }
         List<Sheet> order = liveSheets();
         int i = order.indexOf(sheet);
         return i > 0 ? order.get(i - 1) : null;
+    }
+
+    /** The live sheet with the given sequence name and index, or null. */
+    public Sheet sheetBySequence(String sequence, int index) {
+        if (index <= 0) {
+            return null;
+        }
+        for (Sheet s : liveSheets()) {
+            if (s.sequenceIndex() == index && java.util.Objects.equals(s.sequence(), sequence)) {
+                return s;
+            }
+        }
+        return null;
     }
 
     public Map<String, Cell> cellMap() {

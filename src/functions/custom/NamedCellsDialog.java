@@ -74,6 +74,8 @@ public class NamedCellsDialog extends JDialog {
     private final JLabel hint = new JLabel(" ");
     private final JButton addNameButton = new JButton("Add name…");
     private final JButton addRangeButton = new JButton("Add range…");
+    private final JButton editButton = new JButton("Edit…");
+    private final JButton deleteButton = new JButton("Delete");
 
     /**
      * @param owner        parent frame (for modality and centering)
@@ -97,12 +99,12 @@ public class NamedCellsDialog extends JDialog {
         list.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
-                maybeEdit(e);
+                maybeShowMenu(e);
             }
 
             @Override
             public void mouseReleased(MouseEvent e) {
-                maybeEdit(e);
+                maybeShowMenu(e);
             }
 
             @Override
@@ -119,9 +121,11 @@ public class NamedCellsDialog extends JDialog {
         });
         addNameButton.addActionListener(e -> addEntry(false));
         addRangeButton.addActionListener(e -> addEntry(true));
+        editButton.addActionListener(e -> editSelected());
+        deleteButton.addActionListener(e -> deleteSelected());
 
         JPanel top = new JPanel(new BorderLayout(4, 4));
-        top.add(new JLabel("Double-click an entry to select it in the grid (cursor on its top-left); right-click to edit."),
+        top.add(new JLabel("Double-click to select in the grid; select an entry and use Edit… or Delete."),
                 BorderLayout.NORTH);
         hint.setHorizontalAlignment(SwingConstants.LEFT);
         top.add(hint, BorderLayout.SOUTH);
@@ -129,6 +133,8 @@ public class NamedCellsDialog extends JDialog {
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
         buttons.add(addNameButton);
         buttons.add(addRangeButton);
+        buttons.add(editButton);
+        buttons.add(deleteButton);
 
         setLayout(new BorderLayout());
         add(top, BorderLayout.NORTH);
@@ -179,13 +185,63 @@ public class NamedCellsDialog extends JDialog {
         }
     }
 
-    private void maybeEdit(MouseEvent e) {
+    /** Right-click menu: Edit / Delete on the entry under the cursor. */
+    private void maybeShowMenu(MouseEvent e) {
         if (!e.isPopupTrigger()) {
             return;
         }
         int index = list.locationToIndex(e.getPoint());
+        if (index < 0 || index >= entries.size()
+                || !list.getCellBounds(index, index).contains(e.getPoint())) {
+            return;
+        }
+        list.setSelectedIndex(index);
+        javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+        javax.swing.JMenuItem edit = new javax.swing.JMenuItem("Edit…");
+        edit.addActionListener(a -> editEntry(index));
+        menu.add(edit);
+        javax.swing.JMenuItem del = new javax.swing.JMenuItem("Delete");
+        del.addActionListener(a -> deleteEntry(index));
+        menu.add(del);
+        menu.show(list, e.getX(), e.getY());
+    }
+
+    /** Edits the selected entry. */
+    private void editSelected() {
+        int index = list.getSelectedIndex();
         if (index >= 0 && index < entries.size()) {
             editEntry(index);
+        }
+    }
+
+    /** Deletes the selected entry (with confirmation). */
+    private void deleteSelected() {
+        int index = list.getSelectedIndex();
+        if (index >= 0 && index < entries.size()) {
+            deleteEntry(index);
+        }
+    }
+
+    /** Removes a named cell or named range from the sheet. */
+    private void deleteEntry(int index) {
+        Entry en = entries.get(index);
+        String what = en.range != null ? "named range" : "named cell";
+        int choice = JOptionPane.showConfirmDialog(this,
+                "Delete " + what + " '" + en.name + "'?",
+                "Delete " + what, JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (choice != JOptionPane.YES_OPTION) {
+            return;
+        }
+        try {
+            if (en.range != null) {
+                sheet.setRangeName(en.range.getRow0(), en.range.getCol0() + 1,
+                        en.range.getRow1(), en.range.getCol1() + 1, "");
+            } else {
+                sheet.setCellName(en.ref.getRow(), en.ref.getCol() + 1, "");
+            }
+            afterChange();
+        } catch (RuntimeException ex) {
+            showError(ex);
         }
     }
 
@@ -276,9 +332,11 @@ public class NamedCellsDialog extends JDialog {
         }
 
         int[] from = parseRef(fromText);
+        boolean[] fromDollar = parseDollar(fromText);
         if (from == null) {
             JOptionPane.showMessageDialog(this,
-                    "Enter the reference as 'row,col' with 1-based numbers, e.g. 2,1.",
+                    "Enter the reference as 'row,col' with 1-based numbers, e.g. 2,1. "
+                            + "Use $ for the last row or column, e.g. $,$ or 3,$.",
                     "Invalid cell reference", JOptionPane.ERROR_MESSAGE);
             return;
         }
@@ -286,11 +344,14 @@ public class NamedCellsDialog extends JDialog {
         int col1 = from[1];
         int row1;
         int col2;
+        boolean[] toDollar = new boolean[] { false, false };
         if (isRange) {
             int[] to = parseRef(toText);
+            toDollar = parseDollar(toText);
             if (to == null) {
                 JOptionPane.showMessageDialog(this,
-                        "Enter the 'to' reference as 'row,col' with 1-based numbers, e.g. 3,2.",
+                        "Enter the 'to' reference as 'row,col' with 1-based numbers, e.g. 3,2. "
+                                + "Use $ for the last row or column, e.g. $,$.",
                         "Invalid cell reference", JOptionPane.ERROR_MESSAGE);
                 return;
             }
@@ -310,7 +371,8 @@ public class NamedCellsDialog extends JDialog {
         }
         try {
             if (isRange) {
-                sheet.setRangeName(row0, col1, row1, col2, name);
+                sheet.setRangeName(row0, col1, row1, col2, name,
+                        fromDollar[0], fromDollar[1], toDollar[0], toDollar[1]);
             } else {
                 sheet.setCellName(row0, col1, name);
             }
@@ -318,6 +380,20 @@ public class NamedCellsDialog extends JDialog {
         } catch (RuntimeException ex) {
             showError(ex);
         }
+    }
+
+    /** Whether each component of an "row,col" reference text is a {@code $}. */
+    private static boolean[] parseDollar(String text) {
+        boolean[] out = new boolean[] { false, false };
+        if (text == null) {
+            return out;
+        }
+        String[] parts = text.split(",", 2);
+        if (parts.length == 2) {
+            out[0] = "$".equals(parts[0].trim());
+            out[1] = "$".equals(parts[1].trim());
+        }
+        return out;
     }
 
     /** Applies refresh after a successful add/edit/remove operation. */
@@ -333,7 +409,15 @@ public class NamedCellsDialog extends JDialog {
                 JOptionPane.ERROR_MESSAGE);
     }
 
-    /** Parses a 1-based "row,col" reference; returns {row0, col1} or null. */
+    /**
+     * Parses a 1-based "row,col" reference into {row0, col1}, matching the mixed
+     * convention used by {@code applyEdit}: the row is returned 0-based, the column
+     * stays 1-based (as {@link CellRect}/{@code setRangeName} expect). A component
+     * of {@code $} means the last row / last column of the current grid, so
+     * {@code 3,3} - {@code $,$} spans from cell (3,3) to the grid's bottom-right
+     * cell (i.e. row {@code rows-1}, column {@code cols}). Returns null on invalid
+     * input.
+     */
     private int[] parseRef(String text) {
         if (text == null) {
             return null;
@@ -342,12 +426,30 @@ public class NamedCellsDialog extends JDialog {
         if (parts.length != 2) {
             return null;
         }
-        try {
-            int row = Integer.parseInt(parts[0].trim());
-            int col = Integer.parseInt(parts[1].trim());
-            return new int[]{row - 1, col};
-        } catch (NumberFormatException ex) {
+        int row0 = parseCoord(parts[0].trim(), true);   // 0-based
+        int col1 = parseCoord(parts[1].trim(), false);  // 1-based
+        if (row0 < 0 || col1 < 1) {
             return null;
+        }
+        return new int[]{row0, col1};
+    }
+
+    /**
+     * A coordinate: a 1-based number, or {@code $} for the last row/column. Rows
+     * are returned 0-based (last row -> {@code rows-1}); columns stay 1-based (last
+     * column -> {@code cols}), so the row-number column / header row are never
+     * counted.
+     */
+    private int parseCoord(String token, boolean isRow) {
+        if ("$".equals(token)) {
+            // Rows are handled 0-based, columns 1-based (see parseRef).
+            return isRow ? sheet.rows() - 1 : sheet.cols();
+        }
+        try {
+            int n = Integer.parseInt(token);
+            return isRow ? n - 1 : n;
+        } catch (NumberFormatException ex) {
+            return -1;
         }
     }
 

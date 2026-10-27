@@ -219,6 +219,7 @@ public class BookAPI implements AutoCloseable {
             sheet.setSize(ls.rows, ls.cols);
             sheet.setNamedRefs(ls.names);
             sheet.setNamedRanges(ls.ranges);
+            sheet.setRangeSpecs(ls.rangeSpecs);
             kept.add(ls);
         }
         for (int i = 0; i < kept.size(); i++) {
@@ -233,10 +234,21 @@ public class BookAPI implements AutoCloseable {
                 sheet.setBindingsText(loaded.variablesText);
             }
         }
-        if (!loaded.fullyStored) {
+        if (!loaded.fullyStored || !allRestoreComplete(book)) {
             recomputeAll(book);
         }
         return new State(book, loaded.variablesText, sourceXmlPath);
+    }
+
+    /** True when every sheet carries a complete cached state. */
+    private static boolean allRestoreComplete(SheetBook book) {
+        for (int i = 0; i < book.size(); i++) {
+            Sheet s = book.get(i);
+            if (s != null && !s.isRestoreComplete()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Recalculates every formula cell of every sheet. */

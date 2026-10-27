@@ -38,7 +38,7 @@ import expr.NodeCodec;
 public final class WorkbookCodec {
 
     /** Current payload layout version. */
-    public static final int FORMAT = 3;
+    public static final int FORMAT = 6;
 
     private static final int TEXT = 1;
     private static final int RAW = 2;
@@ -120,12 +120,16 @@ public final class WorkbookCodec {
             writeString(out, id);
         }
         writeString(out, wb.activeSheet);
+        out.writeInt(wb.windowWidth);
+        out.writeInt(wb.windowHeight);
         out.writeInt(wb.sheets.size());
         for (WorkbookIO.LoadedSheet ls : wb.sheets) {
             out.writeInt(ls.rows);
             out.writeInt(ls.cols);
             writeString(out, ls.name);
             writeString(out, ls.uuid);
+            writeString(out, ls.period);
+            out.writeBoolean(ls.frozen);
             out.writeInt(ls.names.size());
             for (Map.Entry<String, CellRef> e : ls.names.entrySet()) {
                 writeString(out, e.getKey());
@@ -192,7 +196,7 @@ public final class WorkbookCodec {
     private static WorkbookIO.LoadedWorkbook decode(byte[] bytes) throws IOException {
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
         int format = in.readUnsignedByte();
-        if (format != FORMAT) {
+        if (format < 3 || format > FORMAT) {
             throw new RuntimeException("Unsupported workbook payload format: " + format);
         }
         String variablesText = readString(in);
@@ -204,6 +208,10 @@ public final class WorkbookCodec {
             wb.visualOrder.add(readString(in));
         }
         wb.activeSheet = readString(in);
+        if (format >= 4) {
+            wb.windowWidth = in.readInt();
+            wb.windowHeight = in.readInt();
+        }
         int sheetCount = in.readInt();
         for (int i = 0; i < sheetCount; i++) {
             int rows = in.readInt();
@@ -211,6 +219,12 @@ public final class WorkbookCodec {
             WorkbookIO.LoadedSheet ls = new WorkbookIO.LoadedSheet(rows, cols);
             ls.name = readString(in);
             ls.uuid = readString(in);
+            if (format >= 5) {
+                ls.period = readString(in);
+            }
+            if (format >= 6) {
+                ls.frozen = in.readBoolean();
+            }
             int nameCount = in.readInt();
             for (int j = 0; j < nameCount; j++) {
                 ls.names.put(readString(in), readRef(in));

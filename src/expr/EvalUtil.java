@@ -23,6 +23,78 @@ public final class EvalUtil {
         }
     }
 
+    // ---------------------------------------------------------- decimal-safe mode
+
+    /** When true, arithmetic on numbers is done in exact decimal ({@code BigDecimal}). */
+    private static volatile boolean decimalMode;
+    /** Decimal scale used for division/reciprocal in decimal mode. */
+    private static final int DECIMAL_SCALE = 12;
+
+    public static boolean isDecimalMode() {
+        return decimalMode;
+    }
+
+    /** Enables/disables decimal-safe arithmetic; returns the previous setting. */
+    public static boolean setDecimalMode(boolean on) {
+        boolean previous = decimalMode;
+        decimalMode = on;
+        return previous;
+    }
+
+    /** The exact decimal value of a number (a Double/Float is taken at its printed value). */
+    private static java.math.BigDecimal decimal(Object o) {
+        if (o instanceof java.math.BigDecimal bd) {
+            return bd;
+        }
+        if (o instanceof Number n) {
+            if (n instanceof Double || n instanceof Float) {
+                return java.math.BigDecimal.valueOf(n.doubleValue());
+            }
+            return new java.math.BigDecimal(n.toString());
+        }
+        return null;
+    }
+
+    /** Drops trailing zeros without producing a negative scale (so 84000, not 8.4E+4). */
+    private static java.math.BigDecimal normalize(java.math.BigDecimal bd) {
+        java.math.BigDecimal s = bd.stripTrailingZeros();
+        return s.scale() < 0 ? s.setScale(0) : s;
+    }
+
+    /** Exact {@code +,-,*,/,%} on two numbers, or null when either is not numeric. */
+    private static Object decimalBinary(Operation op, Object a, Object b) {
+        java.math.BigDecimal x = decimal(a);
+        java.math.BigDecimal y = decimal(b);
+        if (x == null || y == null) {
+            return null;
+        }
+        switch (op) {
+            case ADD:
+                return normalize(x.add(y));
+            case SUB:
+                return normalize(x.subtract(y));
+            case MUL:
+                return normalize(x.multiply(y));
+            case DIV:
+                if (y.signum() == 0) {
+                    throw new ExpressionException("Division by zero.");
+                }
+                return normalize(x.divide(y, DECIMAL_SCALE, java.math.RoundingMode.HALF_UP));
+            case MOD:
+                if (y.signum() == 0) {
+                    throw new ExpressionException("Modulo by zero.");
+                }
+                return normalize(x.remainder(y));
+            default:
+                return null;
+        }
+    }
+
+    /** The plain decimal text of a {@code BigDecimal} (never scientific notation). */
+    public static String decimalText(java.math.BigDecimal bd) {
+        return bd.stripTrailingZeros().toPlainString();
+    }
+
     private EvalUtil() {
     }
 
@@ -44,17 +116,47 @@ public final class EvalUtil {
                 if (a instanceof String || b instanceof String) {
                     return asString(a) + asString(b);
                 }
+                if (decimalMode) {
+                    Object dec = decimalBinary(Operation.ADD, a, b);
+                    if (dec != null) {
+                        return dec;
+                    }
+                }
                 return asDouble(a) + asDouble(b);
             case SUB:
+                if (decimalMode) {
+                    Object dec = decimalBinary(Operation.SUB, a, b);
+                    if (dec != null) {
+                        return dec;
+                    }
+                }
                 return asDouble(a) - asDouble(b);
             case MUL:
+                if (decimalMode) {
+                    Object dec = decimalBinary(Operation.MUL, a, b);
+                    if (dec != null) {
+                        return dec;
+                    }
+                }
                 return asDouble(a) * asDouble(b);
             case DIV: {
+                if (decimalMode) {
+                    Object dec = decimalBinary(Operation.DIV, a, b);
+                    if (dec != null) {
+                        return dec;
+                    }
+                }
                 double d = asDouble(b);
                 if (d == 0) throw new ExpressionException("Division by zero.");
                 return asDouble(a) / d;
             }
             case MOD: {
+                if (decimalMode) {
+                    Object dec = decimalBinary(Operation.MOD, a, b);
+                    if (dec != null) {
+                        return dec;
+                    }
+                }
                 double d = asDouble(b);
                 if (d == 0) throw new ExpressionException("Modulo by zero.");
                 return asDouble(a) % d;
@@ -93,10 +195,26 @@ public final class EvalUtil {
                 if (a instanceof LocalDate || a instanceof LocalDateTime) {
                     return new Neg(a);
                 }
+                if (decimalMode) {
+                    java.math.BigDecimal x = decimal(a);
+                    if (x != null) {
+                        return normalize(x.negate());
+                    }
+                }
                 return -asDouble(a);
             case NOT:
                 return !asBoolean(a);
             case RECIP: {
+                if (decimalMode) {
+                    java.math.BigDecimal x = decimal(a);
+                    if (x != null) {
+                        if (x.signum() == 0) {
+                            throw new ExpressionException("Division by zero.");
+                        }
+                        return normalize(java.math.BigDecimal.ONE
+                                .divide(x, DECIMAL_SCALE, java.math.RoundingMode.HALF_UP));
+                    }
+                }
                 double d = asDouble(a);
                 if (d == 0) throw new ExpressionException("Division by zero.");
                 return 1.0 / d;
@@ -136,6 +254,13 @@ public final class EvalUtil {
 
     private static boolean equalsVal(Object a, Object b) {
         if (a instanceof Number && b instanceof Number) {
+            if (decimalMode) {
+                java.math.BigDecimal x = decimal(a);
+                java.math.BigDecimal y = decimal(b);
+                if (x != null && y != null) {
+                    return x.compareTo(y) == 0;
+                }
+            }
             return ((Number) a).doubleValue() == ((Number) b).doubleValue();
         }
         if (a instanceof String && b instanceof String) {
@@ -164,6 +289,13 @@ public final class EvalUtil {
 
     private static int compare(Object a, Object b) {
         if (a instanceof Number && b instanceof Number) {
+            if (decimalMode) {
+                java.math.BigDecimal x = decimal(a);
+                java.math.BigDecimal y = decimal(b);
+                if (x != null && y != null) {
+                    return x.compareTo(y);
+                }
+            }
             return Double.compare(((Number) a).doubleValue(), ((Number) b).doubleValue());
         }
         if (a instanceof String && b instanceof String) {
@@ -221,6 +353,7 @@ public final class EvalUtil {
 
     public static String asString(Object o) {
         if (o instanceof String s) return s;
+        if (o instanceof java.math.BigDecimal bd) return decimalText(bd);
         if (o instanceof Double d) return format(d);
         if (o instanceof LocalDate d) return d.format(DATE_FMT);
         if (o instanceof LocalDateTime d) return d.format(DATETIME_FMT);
@@ -231,9 +364,19 @@ public final class EvalUtil {
     }
 
     public static String format(double d) {
-        if (d == Math.floor(d) && !Double.isInfinite(d) && !Double.isNaN(d)) {
+        if (Double.isNaN(d) || Double.isInfinite(d)) {
+            return String.valueOf(d);
+        }
+        if (d == Math.floor(d) && Math.abs(d) < 1e18) {
             return Long.toString((long) d);
         }
-        return String.valueOf(d);
+        // A double carries only ~15 significant decimal digits, so Double.toString
+        // can expose binary rounding noise (0.07 * 1200000 -> 84000.00000000001).
+        // Round to 15 significant digits and drop trailing zeros so the shown value
+        // is the intended decimal one.
+        return new java.math.BigDecimal(d)
+                .round(new java.math.MathContext(15))
+                .stripTrailingZeros()
+                .toPlainString();
     }
 }

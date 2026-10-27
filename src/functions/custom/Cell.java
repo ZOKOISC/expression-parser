@@ -3,6 +3,7 @@ package functions.custom;
 import java.awt.Color;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
+import java.text.ParsePosition;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -46,6 +47,8 @@ public class Cell {
     private Node expression;
     private String textValue;
     private String rawExpression;
+    /** The raw value text the user entered, kept independently of formatPattern. */
+    private String rawValueText;
 	private final Dependents dependents = new Dependents();
     private Set<CellRef> referenced;
 
@@ -105,6 +108,7 @@ public class Cell {
         this.type = parsed.getType();
         this.value = parsed.getValue();
         this.textValue = rawText;
+        this.rawValueText = rawText == null ? "" : rawText.trim();
         // A literal holds a value, not an expression source: never keep the value
         // text as the raw expression (a constant node has no source text).
         this.rawExpression = null;
@@ -116,6 +120,28 @@ public class Cell {
         // pattern is preserved for non-percent input.
         if (parsed.getFormatPattern() != null) {
             this.formatPattern = parsed.getFormatPattern();
+        }
+    }
+
+    /** The raw value text the user entered, independent of the format pattern. */
+    public String getRawValueText() {
+        return rawValueText == null ? "" : rawValueText;
+    }
+
+    public void setRawValueText(String rawValueText) {
+        this.rawValueText = rawValueText == null ? "" : rawValueText;
+    }
+
+    /** True when the text is a plain (unformatted) number literal. */
+    public static boolean isPlainNumber(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        try {
+            Double.parseDouble(text.trim());
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
         }
     }
 	
@@ -252,6 +278,9 @@ public class Cell {
         if (value == null) {
             return "";
         }
+        if (value instanceof java.math.BigDecimal bd) {
+            return EvalUtil.decimalText(bd);
+        }
         if (value instanceof Number n) {
             return Double.toString(n.doubleValue());
         }
@@ -271,7 +300,8 @@ public class Cell {
                 return parse(encoded).getValue();
             }
             return switch (type) {
-                case NUMERIC -> Double.valueOf(encoded);
+                case NUMERIC -> EvalUtil.isDecimalMode()
+                        ? new java.math.BigDecimal(encoded) : Double.valueOf(encoded);
                 case BOOLEAN -> Boolean.valueOf(encoded);
                 case DATE -> LocalDate.parse(encoded);
                 case DATETIME -> LocalDateTime.parse(encoded);
@@ -326,6 +356,29 @@ public class Cell {
         return df.format(value);
     }
 
+    /**
+     * Parses text formatted with the given {@code DecimalFormat} pattern back to a
+     * number (inverse of {@link #formatNumber}), or null when it does not match.
+     * Used to recover the raw numeric value from a cell whose value was stored as
+     * its formatted display text.
+     */
+    public static Double parseFormattedNumber(String pattern, String text) {
+        if (pattern == null || pattern.isEmpty() || text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            DecimalFormat df = new DecimalFormat(pattern);
+            if (pattern.endsWith("%")) {
+                df.setDecimalFormatSymbols(DecimalFormatSymbols.getInstance(Locale.ROOT));
+            }
+            ParsePosition pos = new ParsePosition(0);
+            Number n = df.parse(text, pos);
+            return n == null ? null : n.doubleValue();
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
     public String display() {
         if (errorMessage != null) {
             return getErrorText();
@@ -362,6 +415,9 @@ public class Cell {
         }
         if (value instanceof Double dd) {
             return EvalUtil.format(dd);
+        }
+        if (value instanceof java.math.BigDecimal bd) {
+            return EvalUtil.decimalText(bd);
         }
         if (value instanceof Boolean b) {
             return Boolean.toString(b);
@@ -536,7 +592,13 @@ public class Cell {
             return this;
         }
         if (target == DataType.STRING) {
-            return new Cell(DataType.STRING, toTextValue());
+            // Convert from the raw value text, never the formatted display text.
+            String raw = getRawValueText();
+            if (raw == null || raw.isEmpty()) {
+                raw = value instanceof Number n ? EvalUtil.format(n.doubleValue())
+                        : String.valueOf(value);
+            }
+            return new Cell(DataType.STRING, raw);
         }
         if (type == DataType.STRING) {
             String text = value == null ? "" : String.valueOf(value);
@@ -587,16 +649,39 @@ public class Cell {
         return display();
     }
     private boolean recalculating;
+    /** True when the datatype was set by hand and must survive recalculation. */
+    private boolean typeExplicit;
+
+    public boolean isTypeExplicit() {
+        return typeExplicit;
+    }
+
+    public void setTypeExplicit(boolean explicit) {
+        this.typeExplicit = explicit;
+    }
 
     public void recalculate(CellRef self, Map<String, Cell> cellMap, Map<String, Object> bindings, FunctionRegistry registry) {
         recalculate(self, cellMap, bindings, registry, null);
     }
 
     public void recalculate(CellRef self, Map<String, Cell> cellMap, Map<String, Object> bindings, FunctionRegistry registry, SheetBook book) {
-        if (recalculating) {
+        recalculate(self, cellMap, bindings, registry, book, new java.util.HashSet<>());
+    }
+
+    public void recalculate(CellRef self, Map<String, Cell> cellMap, Map<String, Object> bindings, FunctionRegistry registry, SheetBook book, java.util.Set<String> visited) {
+        // The per-cell flag breaks cycles; the shared `visited` set makes the walk
+        // visit each cell at most once per recalculation pass, so a dense dependency
+        // graph (e.g. chained prev[...] sheets) cannot blow up exponentially.
+        if (recalculating || !visited.add(self.toString())) {
             return;
         }
         recalculating = true;
+        CellRef previousCurrent = book == null ? null : book.currentCell();
+        if (book != null) {
+            // Publish the cell being evaluated so row() / col() / sheetNdx() report
+            // its actual position during the evaluation.
+            book.setCurrentCell(self);
+        }
         try {
             if (expression != null) {
                 FunctionRegistry reg = registryFor(registry, book, self.getSheet());
@@ -619,8 +704,15 @@ public class Cell {
                     errorMessage = msg == null || msg.isBlank() ? ex.getClass().getSimpleName() : msg;
                 }
                 value = v;
-                type = v == null ? DataType.ANY : EvalUtil.valueType(v);
-                textValue = v == null ? "" : EvalUtil.asString(v);
+                if (v != null) {
+                    if (!typeExplicit) {
+                        type = EvalUtil.valueType(v);
+                    }
+                    textValue = EvalUtil.asString(v);
+                } else {
+                    // An error (or no value) must not reset the manually set type.
+                    textValue = "";
+                }
             }
             // Recurse into dependents even for a literal cell (no expression):
             // clearing or changing a referenced cell must still recalculate the
@@ -629,10 +721,13 @@ public class Cell {
             for (CellRef d : dependents.getList()) {
                 Cell dc = cellMap.get(d.toString());
                 if (dc != null) {
-                    dc.recalculate(d, cellMap, bindings, registryFor(registry, book, d.getSheet()), book);
+                    dc.recalculate(d, cellMap, bindings, registryFor(registry, book, d.getSheet()), book, visited);
                 }
             }
         } finally {
+            if (book != null) {
+                book.setCurrentCell(previousCurrent);
+            }
             recalculating = false;
         }
     }
